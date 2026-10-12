@@ -3,6 +3,9 @@ from datetime import time
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from datetime import timedelta
+
+from app.erp.cache import beijing_today, ensure_days
 from app.importers.common import ImportValidationError
 from app.metrics.common import history_range, parse_date, parse_threshold, parse_time, parse_x, pct
 
@@ -43,6 +46,9 @@ def l2b_anomaly(
     else:
         raise ImportValidationError("range_type 只能是 full_day 或 period")
 
+    if rt == "full_day":
+        ensure_days(session, [h0 + timedelta(days=i) for i in range((day - h0).days + 1)])
+
     rows = session.execute(
         text(
             """SELECT biz_date AS d, partner_code AS code, query_count AS q, order_count AS o
@@ -54,7 +60,7 @@ def l2b_anomaly(
         {"rt": rt, "ps": ps, "pe": pe, "pt": PTYPE[dimension], "h0": h0, "day": day, "code": partner_code or None},
     ).mappings().all()
     if not rows:
-        return {"日期": str(day), "结论": "查询量表中没有该日期与范围的数据，无法判断。请先上传对应的查询量表。"}
+        return {"日期": str(day), "结论": "没有该日期与范围的查询量数据，无法判断。完整一天的数据由 ERP 接口获取；时间段的数据需要上传查询量表。"}
 
     # 按合作方（overall 时合并为一个组）汇总：{组: {日期: (查询量, 订单量)}}
     agg: dict[str, dict] = {}
@@ -101,7 +107,7 @@ def l2b_anomaly(
         (g for g in groups if g["anomaly"]),
         key=lambda g: (0 if g["flag"] else 1, g["change_rate"] if g["change_rate"] is not None else 0),
     )
-    return {
+    result = {
         "日期": str(day),
         "维度": dimension,
         "范围": "完整一天" if rt == "full_day" else f"{ps.strftime('%H:%M')}～{pe.strftime('%H:%M')}",
@@ -113,3 +119,6 @@ def l2b_anomaly(
         "异常明细（变化率从低到高，有查询无订单的排最前）": anomalies[:top_n],
         "备注": "基线 = 历史窗口 Σ查询量 / Σ订单量；历史基线为 0 时不判断变化率；有查询无订单单独标记。",
     }
+    if day == beijing_today():
+        result["注意"] = "当天数据是截至查询时刻的累计值（ERP 接口只支持按日期查询），与历史整天数据不是同一时间段，变化率仅供参考。"
+    return result

@@ -25,7 +25,7 @@ class UploadBatch(Base):
     row_count: Mapped[int] = mapped_column(Integer, default=0)
     summary: Mapped[dict | None] = mapped_column(JSONB)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    user_id: Mapped[int | None] = mapped_column(BigInteger)  # 预留，Demo 阶段不使用
+    user_id: Mapped[int | None] = mapped_column(BigInteger)  # 上传人，数据全员共享
 
 
 class RawOrderRow(Base):

@@ -51,7 +51,8 @@ TOOL_SPECS: list[dict] = [
         "name": "l2b_anomaly",
         "description": (
             "查订比异常（场景2）：查订比 = 查询量 / 订单量。当前查订比与前 x 天汇总查订比基线对比，下降超过阈值判定异常。"
-            "需要查询量表已上传且范围一致。dimension：overall 整体；channel 单渠道；supplier 单供应。"
+            "查询量数据：完整一天由 ERP 接口按日获取（历史整天会缓存，当天实时获取）；时间段范围需要上传查询量表。"
+            "dimension：overall 整体；channel 单渠道；supplier 单供应。"
         ),
         "parameters": _obj({
             "date": _str,
@@ -83,6 +84,17 @@ TOOL_SPECS: list[dict] = [
         }, ["date_from", "date_to", "group_by"]),
     }},
     {"type": "function", "function": {
+        "name": "commission_rules",
+        "description": (
+            "查看当前佣金规则配置：每个渠道的佣金方式、数值和生效时间。"
+            "percent 表示按销售额的百分比扣减（利润 = 销售额 × (1 − 佣金率) − 成本）；"
+            "fixed_usd 表示每单固定扣费（单位 USD）。不填渠道则返回全部。"
+        ),
+        "parameters": _obj({
+            "channel_code": _str,
+        }, []),
+    }},
+    {"type": "function", "function": {
         "name": "profit_anomaly",
         "description": (
             "利润异常（场景3）：当日利润与前 x 天日均利润对比（以 USD 判断），并拆解为订单量变化与单均利润变化。"
@@ -98,6 +110,37 @@ TOOL_SPECS: list[dict] = [
 ]
 
 
+def describe_rule(rule_type: str, value: Any) -> str:
+    """把佣金配置翻译成业务语言，例如 percent 0.02 → 佣金 2%。"""
+    v = float(value)
+    if rule_type == "percent":
+        return f"佣金 {v * 100:g}%"
+    if rule_type == "fixed_usd":
+        return f"每单固定扣费 {v:g} USD"
+    return f"未知规则类型 {rule_type}"
+
+
+def _commission_rules(session: Session, a: dict) -> dict:
+    sql = "SELECT channel_code, rule_type, value, effective_from, effective_to FROM commission_rule"
+    params: dict[str, Any] = {}
+    if a.get("channel_code"):
+        sql += " WHERE channel_code = :c"
+        params["c"] = a["channel_code"]
+    rows = session.execute(text(sql + " ORDER BY channel_code, effective_from"), params).mappings().all()
+    return {
+        "佣金规则": [
+            {
+                "渠道": r["channel_code"],
+                "规则": describe_rule(r["rule_type"], r["value"]),
+                "生效日期": str(r["effective_from"]),
+                "失效日期": str(r["effective_to"]) if r["effective_to"] else "长期有效",
+            }
+            for r in rows
+        ],
+        "说明": "未列出的渠道没有佣金，利润 = 销售额 − 成本。",
+    }
+
+
 def _coverage(session: Session, _args: dict) -> dict:
     def rng(sql: str) -> dict:
         r = session.execute(text(sql)).mappings().one()
@@ -106,7 +149,8 @@ def _coverage(session: Session, _args: dict) -> dict:
     return {
         "订单（渠道订单，支付日期）": rng("SELECT MIN(pay_date) AS lo, MAX(pay_date) AS hi FROM tm_order"),
         "供应订单（支付日期，兜底后）": rng("SELECT MIN(CAST(pay_time_effective AS DATE)) AS lo, MAX(CAST(pay_time_effective AS DATE)) AS hi FROM supplier_order"),
-        "查询量表日期": rng("SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM query_stat"),
+        "查询量表日期（Excel 上传）": rng("SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM query_stat WHERE source = 'excel'"),
+        "查询量（完整一天，ERP 接口）": "按需获取，可查询任意历史日期；当天为截至查询时的实时累计",
         "数据质量表日期": rng("SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM supply_quality"),
     }
 
@@ -137,6 +181,7 @@ HANDLERS: dict[str, Callable[[Session, dict], dict]] = {
     "l2b_anomaly": _l2b,
     "profit_summary": _profit_sum,
     "profit_anomaly": _profit_anom,
+    "commission_rules": _commission_rules,
 }
 
 

@@ -1,7 +1,7 @@
-from datetime import date, time
+from datetime import date, datetime, time
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Date, ForeignKey, Integer, Numeric, String, Time, UniqueConstraint
+from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Integer, Numeric, String, Time, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -27,7 +27,8 @@ class QueryStat(Base):
     order_count: Mapped[int] = mapped_column(BigInteger, default=0)
     segment_count: Mapped[int] = mapped_column(BigInteger, default=0)
     blocked_count: Mapped[int] = mapped_column(BigInteger, default=0)
-    batch_id: Mapped[int] = mapped_column(ForeignKey("upload_batch.id"), index=True)
+    batch_id: Mapped[int | None] = mapped_column(ForeignKey("upload_batch.id"), index=True)  # 来自接口时为空
+    source: Mapped[str] = mapped_column(String(16), default="excel", server_default="excel")  # excel / erp_api
 
 
 class SupplyQuality(Base):
@@ -76,3 +77,13 @@ class CommissionRule(Base):
     value: Mapped[Decimal] = mapped_column(Numeric(10, 6))
     effective_from: Mapped[date] = mapped_column(Date)
     effective_to: Mapped[date | None] = mapped_column(Date)
+
+
+class Look2BookSync(Base):
+    """查订比接口的按日缓存记录：某一天（历史整天）已从 ERP 拉取并写入 query_stat。当天不记录，每次实时拉取。"""
+
+    __tablename__ = "look2book_sync"
+
+    biz_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    row_count: Mapped[int] = mapped_column(Integer, default=0)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

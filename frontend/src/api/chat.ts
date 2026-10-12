@@ -1,3 +1,5 @@
+import { redirectToLogin } from "./client";
+
 export interface LlmStep {
   type: "llm";
   round: number;
@@ -36,6 +38,8 @@ export function chatError(err: unknown): string {
 }
 
 export interface StreamHandlers {
+  // 本次问答所属的会话 ID（新建会话时由服务端分配）
+  onConversation: (id: number) => void;
   onToken: (text: string) => void;
   onToolStart: (name: string, args: Record<string, unknown>) => void;
   onStep: (step: TraceStep) => void;
@@ -43,12 +47,21 @@ export interface StreamHandlers {
 }
 
 // 通过 fetch 读取 SSE（EventSource 不支持 POST）。流中出现 error 事件时抛出异常。
-export async function streamQuestion(question: string, history: HistoryItem[], h: StreamHandlers): Promise<void> {
+export async function streamQuestion(
+  question: string,
+  history: HistoryItem[],
+  conversationId: number | null,
+  h: StreamHandlers,
+): Promise<void> {
   const resp = await fetch("/api/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, history }),
+    body: JSON.stringify({ question, history, conversation_id: conversationId }),
   });
+  if (resp.status === 401) {
+    redirectToLogin();
+    throw new Error("登录已失效，请重新登录");
+  }
   if (!resp.ok || !resp.body) {
     let detail = `请求失败（${resp.status}）`;
     try {
@@ -75,6 +88,9 @@ export async function streamQuestion(question: string, history: HistoryItem[], h
       if (!line) continue;
       const ev = JSON.parse(line.slice(6));
       switch (ev.type) {
+        case "conversation":
+          h.onConversation(ev.id);
+          break;
         case "token":
           h.onToken(ev.text);
           break;

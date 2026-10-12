@@ -1,9 +1,11 @@
 import hashlib
 from datetime import datetime
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
 
+from app.api.deps import current_user
+from app.auth.service import CurrentUser
 from app.core.db import SessionLocal
 from app.importers.common import ImportValidationError, Window, build_window
 from app.importers.order import import_orders
@@ -11,7 +13,7 @@ from app.importers.query import import_query
 from app.importers.quality import import_quality
 from app.models.upload import UploadBatch
 
-router = APIRouter(prefix="/api/uploads", tags=["uploads"])
+router = APIRouter(prefix="/api/uploads", tags=["uploads"], dependencies=[Depends(current_user)])
 
 
 # 统一签名：(session, batch, 文件字节, 时间窗口)。订单表不需要时间窗口，由表内时间字段决定
@@ -51,6 +53,7 @@ def list_batches(limit: int = 50) -> list[dict]:
 
 @router.post("", status_code=201)
 def create_upload(
+    user: CurrentUser = Depends(current_user),
     file: UploadFile = File(...),
     file_type: str = Form(...),
     range_type: str | None = Form(None),
@@ -88,6 +91,7 @@ def create_upload(
                 period_start=window.start if window else None,
                 period_end=window.end if window else None,
                 uploaded_at=datetime.now(),
+                user_id=user.id,
             )
             session.add(batch)
             session.flush()
