@@ -1,0 +1,50 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-flight_analysis}
+      POSTGRES_USER: ${POSTGRES_USER:-flight}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-flight} -d ${POSTGRES_DB:-flight_analysis}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # 映射到宿主机 9095，便于用数据库工具直连（仅内网使用，见 .env 中的 DB_PORT）
+    ports:
+      - "${DB_PORT:-9095}:5432"
+
+  backend:
+    # 本地构建用 build；部署时由 deploy.sh 拉取 GHCR 镜像（--no-build）
+    image: ${IMAGE_REGISTRY:-ghcr.io/junleo1945}/flightticketdataanalysis-backend:${IMAGE_TAG:-latest}
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-flight}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-flight_analysis}
+      RUN_MIGRATIONS_ON_START: ${RUN_MIGRATIONS_ON_START:-true}
+      UPLOAD_DIR: /data/uploads
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,db,backend}
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    image: ${IMAGE_REGISTRY:-ghcr.io/junleo1945}/flightticketdataanalysis-frontend:${IMAGE_TAG:-latest}
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-9092}:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  uploads:

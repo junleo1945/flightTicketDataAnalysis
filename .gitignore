@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+backend/.venv/
+node_modules/
+frontend/dist/
+*.xlsx
+# 业务样例数据、需求文档等资料不进版本库
+数据质量/
+resources/
+.DS_Store
