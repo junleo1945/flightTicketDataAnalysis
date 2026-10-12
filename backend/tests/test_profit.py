@@ -58,3 +58,11 @@ def test_supplier_allocation_follows_cost_share():
     shares = {k: (fc, fu) for k, fc, fu, _ in allocations(f, "supplier")}
     assert shares["A"][1] == D("30") / D("40")
     assert shares["B"][0] == D("100") / D("400")
+
+
+def test_describe_rule_in_business_language():
+    from app.llm.tools import describe_rule
+
+    assert describe_rule("percent", D("0.02")) == "佣金 2%"
+    assert describe_rule("percent", D("0.005")) == "佣金 0.5%"
+    assert describe_rule("fixed_usd", D("0.2")) == "每单固定扣费 0.2 USD"

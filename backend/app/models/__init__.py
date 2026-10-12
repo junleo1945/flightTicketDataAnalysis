@@ -2,4 +2,5 @@
 from app.models.analysis import CommissionRule, QueryStat, SupplyQuality  # noqa: F401
 from app.models.order import OrderAirline, OrderRoute, SupplierOrder, TmOrder  # noqa: F401
 from app.models.upload import RawOrderRow, UploadBatch  # noqa: F401
-from app.models.chat import ChatLog  # noqa: F401
+from app.models.chat import ChatLog, Conversation  # noqa: F401
+from app.models.auth import AuthSession, User  # noqa: F401

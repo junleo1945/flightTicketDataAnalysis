@@ -1,0 +1,22 @@
+# 本地开发覆盖文件，只改下面列出的项，其余沿用 docker-compose.yml：
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# 与部署的区别：
+# - backend 挂载 ./backend 源码并开启 --reload，改代码无需重新构建，只有改 pyproject.toml 才需要 build
+# - 镜像名改为 flight-analysis-backend:dev，不覆盖 GHCR 拉下来的 latest
+# - ERP 地址沿用 .env 中的 ERP_BASE_URL，不做替换
+# - frontend 不进容器：本地执行 `npm run dev`，Vite 把 /api 代理到 localhost:8000
+services:
+  backend:
+    image: flight-analysis-backend:dev
+    build: ./backend
+    entrypoint: ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app"]
+    volumes:
+      - ./backend:/app
+      - uploads:/data/uploads
+    ports:
+      - "8000:8000"
+
+  # 默认不启动容器内的前端，本地用 npm run dev；需要时：docker compose --profile frontend-container ... up -d
+  frontend:
+    profiles: ["frontend-container"]
