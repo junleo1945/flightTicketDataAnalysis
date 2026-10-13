@@ -12,10 +12,13 @@ class QueryStat(Base):
 
     __tablename__ = "query_stat"
     __table_args__ = (
-        UniqueConstraint("biz_date", "range_type", "period_start", "period_end", "partner_type", "partner_code", name="uq_query_stat_key"),
+        UniqueConstraint(
+            "user_id", "biz_date", "range_type", "period_start", "period_end", "partner_type", "partner_code", name="uq_query_stat_key"
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True, server_default="0")  # 数据归属：上传人或拉取人；0 表示无归属，不对任何人可见
     biz_date: Mapped[date] = mapped_column(Date, index=True)
     range_type: Mapped[str] = mapped_column(String(16))
     period_start: Mapped[time] = mapped_column(Time)
@@ -84,6 +87,7 @@ class Look2BookSync(Base):
 
     __tablename__ = "look2book_sync"
 
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     biz_date: Mapped[date] = mapped_column(Date, primary_key=True)
     row_count: Mapped[int] = mapped_column(Integer, default=0)
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

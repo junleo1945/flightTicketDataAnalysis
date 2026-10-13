@@ -1,6 +1,6 @@
 """ERP 查订比接口：/flight/config/look2book/records，只支持按日期查询（完整一天）。
 
-用服务账号登录 ERP 获取 tm_sso_sid，会话失效时自动重新登录一次。
+使用调用者的 tm_sso_sid（来自其登录会话），不保存密码，会话失效时提示重新登录。
 """
 
 from dataclasses import dataclass
@@ -8,7 +8,7 @@ from datetime import date
 
 import httpx
 
-from app.auth.erp import ErpAuthError, ErpClient, ErpUpstreamError
+from app.auth.erp import ErpAuthError, ErpUpstreamError
 
 PATH = "/flight/config/look2book/records"
 PAGE_SIZE = 500
@@ -43,34 +43,17 @@ def _parse_row(item: dict) -> Look2BookRow:
 
 
 class Look2BookClient:
-    def __init__(
-        self,
-        base_url: str,
-        username: str,
-        password: str,
-        transport: httpx.BaseTransport | None = None,
-        timeout_seconds: float = 15.0,
-    ):
+    """使用当前登录用户自己的 tm_sso_sid 调用查订比接口，权限与该用户在 ERP 中的一致。"""
+
+    def __init__(self, base_url: str, erp_sid: str, transport: httpx.BaseTransport | None = None, timeout_seconds: float = 15.0):
         self._base = base_url.rstrip("/")
-        self._username = username
-        self._password = password
-        self._erp = ErpClient(base_url, timeout_seconds=timeout_seconds, transport=transport)
+        self._sid = erp_sid
         self._http = httpx.Client(timeout=timeout_seconds, follow_redirects=False, transport=transport)
-        self._sid: str | None = None
 
     def close(self) -> None:
         self._http.close()
-        self._erp.close()
 
-    def _login(self) -> None:
-        try:
-            self._sid = self._erp.authenticate(self._username, self._password).erp_sid
-        except ErpAuthError as exc:
-            raise ErpAuthError(f"ERP 服务账号登录失败：{exc}") from exc
-
-    def _post(self, payload: dict, retry: bool = True) -> dict:
-        if self._sid is None:
-            self._login()
+    def _post(self, payload: dict) -> dict:
         try:
             res = self._http.post(
                 f"{self._base}{PATH}",
@@ -81,10 +64,7 @@ class Look2BookClient:
             raise ErpUpstreamError(f"查订比接口请求失败：{exc}") from exc
 
         if res.status_code in (401, 302, 307):
-            if retry:
-                self._login()
-                return self._post(payload, retry=False)
-            raise ErpAuthError("ERP 服务账号会话已失效")
+            raise ErpAuthError("ERP 登录已失效，请重新登录后再查询")
         if res.status_code != 200:
             raise ErpUpstreamError(f"查订比接口 HTTP {res.status_code}")
 

@@ -1,5 +1,6 @@
 """查订比数据的按需缓存。
 
+- 按人隔离：每个用户用自己的 ERP 会话拉取，数据写入 query_stat 时带 user_id，同步记录也按用户记录。
 - 历史整天：第一次需要时从 ERP 拉取，写入 query_stat 并记入 look2book_sync，之后直接读库。
 - 当天：每次需要时实时拉取，覆盖写入 query_stat，但不记入同步表（数据是截至拉取时刻的累计）。
 """
@@ -20,7 +21,7 @@ from app.models.analysis import Look2BookSync, QueryStat
 
 BEIJING = ZoneInfo("Asia/Shanghai")
 FULL_DAY_START, FULL_DAY_END = time(0, 0, 0), time(23, 59, 59)
-KEY_COLS = ["biz_date", "range_type", "period_start", "period_end", "partner_type", "partner_code"]
+KEY_COLS = ["user_id", "biz_date", "range_type", "period_start", "period_end", "partner_type", "partner_code"]
 
 
 class Look2BookSource(Protocol):
@@ -32,17 +33,17 @@ def beijing_today() -> date:
     return datetime.now(BEIJING).date()
 
 
-def make_client() -> Look2BookClient:
-    settings = get_settings()
-    if not settings.erp_service_username or not settings.erp_service_password:
-        raise ImportValidationError("未配置 ERP 服务账号（.env 中的 ERP_SERVICE_USERNAME / ERP_SERVICE_PASSWORD），无法获取查订比数据")
-    return Look2BookClient(settings.erp_base_url, settings.erp_service_username, settings.erp_service_password)
+def make_client(erp_sid: str) -> Look2BookClient:
+    if not erp_sid:
+        raise ImportValidationError("当前会话没有 ERP 登录信息，无法获取查订比数据，请重新登录")
+    return Look2BookClient(get_settings().erp_base_url, erp_sid)
 
 
-def _replace_day(session: Session, day: date, rows: list[Look2BookRow]) -> None:
-    """替换某天从接口来的数据。若 Excel 上传的同日期数据键相同，会被接口数据覆盖。"""
+def _replace_day(session: Session, user_id: int, day: date, rows: list[Look2BookRow]) -> None:
+    """替换某用户某天从接口来的数据。"""
     session.execute(
         delete(QueryStat).where(
+            QueryStat.user_id == user_id,
             QueryStat.biz_date == day,
             QueryStat.range_type == "full_day",
             QueryStat.source == "erp_api",
@@ -53,6 +54,7 @@ def _replace_day(session: Session, day: date, rows: list[Look2BookRow]) -> None:
         QueryStat.__table__,
         [
             {
+                "user_id": user_id,
                 "biz_date": day,
                 "range_type": "full_day",
                 "period_start": FULL_DAY_START,
@@ -73,8 +75,8 @@ def _replace_day(session: Session, day: date, rows: list[Look2BookRow]) -> None:
     )
 
 
-def ensure_days(session: Session, days: list[date], client: Look2BookSource | None = None) -> None:
-    """保证 days 中每一天的查订比数据可用：历史缺的补拉，当天实时拉取。"""
+def ensure_days(session: Session, days: list[date], user_id: int, erp_sid: str, client: Look2BookSource | None = None) -> None:
+    """保证 days 中每一天的查订比数据可用（按用户）：历史缺的补拉，当天实时拉取。"""
     if not days:
         return
     today = beijing_today()
@@ -84,20 +86,24 @@ def ensure_days(session: Session, days: list[date], client: Look2BookSource | No
         return
 
     own_client = client is None
-    source: Look2BookSource = client or make_client()
+    source: Look2BookSource = client or make_client(erp_sid)
     try:
         cached: set[date] = set()
         if past:
-            cached = set(session.scalars(select(Look2BookSync.biz_date).where(Look2BookSync.biz_date.in_(past))).all())
+            cached = set(
+                session.scalars(
+                    select(Look2BookSync.biz_date).where(Look2BookSync.user_id == user_id, Look2BookSync.biz_date.in_(past))
+                ).all()
+            )
         for d in past:
             if d in cached:
                 continue
             rows = source.fetch_day(d)
-            _replace_day(session, d, rows)
-            session.merge(Look2BookSync(biz_date=d, row_count=len(rows), synced_at=datetime.now(timezone.utc)))
+            _replace_day(session, user_id, d, rows)
+            session.merge(Look2BookSync(user_id=user_id, biz_date=d, row_count=len(rows), synced_at=datetime.now(timezone.utc)))
             session.commit()
         if need_today:
-            _replace_day(session, today, source.fetch_day(today))
+            _replace_day(session, user_id, today, source.fetch_day(today))
             session.commit()
     except (ErpAuthError, ErpUpstreamError) as exc:
         session.rollback()

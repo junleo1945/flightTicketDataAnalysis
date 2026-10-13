@@ -1,6 +1,7 @@
 """大模型可调用的工具。数字全部由这里的计算函数产生，模型只负责理解问题和解释结果。"""
 
 import json
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from sqlalchemy import text
@@ -14,6 +15,14 @@ from app.metrics.query_ratio import l2b_anomaly
 _str = {"type": "string"}
 _num = {"type": "number"}
 _int = {"type": "integer"}
+
+
+@dataclass(frozen=True)
+class ToolContext:
+    """当前提问人的身份：查询量等按人隔离的数据据此过滤，ERP 拉取也用其会话。"""
+
+    user_id: int
+    erp_sid: str
 
 
 def _obj(props: dict, required: list[str]) -> dict:
@@ -120,7 +129,7 @@ def describe_rule(rule_type: str, value: Any) -> str:
     return f"未知规则类型 {rule_type}"
 
 
-def _commission_rules(session: Session, a: dict) -> dict:
+def _commission_rules(session: Session, a: dict, ctx: ToolContext) -> dict:
     sql = "SELECT channel_code, rule_type, value, effective_from, effective_to FROM commission_rule"
     params: dict[str, Any] = {}
     if a.get("channel_code"):
@@ -141,7 +150,7 @@ def _commission_rules(session: Session, a: dict) -> dict:
     }
 
 
-def _coverage(session: Session, _args: dict) -> dict:
+def _coverage(session: Session, _args: dict, ctx: ToolContext) -> dict:
     def rng(sql: str) -> dict:
         r = session.execute(text(sql)).mappings().one()
         return {"最早": str(r["lo"]) if r["lo"] else None, "最晚": str(r["hi"]) if r["hi"] else None}
@@ -149,29 +158,30 @@ def _coverage(session: Session, _args: dict) -> dict:
     return {
         "订单（渠道订单，支付日期）": rng("SELECT MIN(pay_date) AS lo, MAX(pay_date) AS hi FROM tm_order"),
         "供应订单（支付日期，兜底后）": rng("SELECT MIN(CAST(pay_time_effective AS DATE)) AS lo, MAX(CAST(pay_time_effective AS DATE)) AS hi FROM supplier_order"),
-        "查询量表日期（Excel 上传）": rng("SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM query_stat WHERE source = 'excel'"),
+        "查询量表日期（Excel 上传）": rng(f"SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM query_stat WHERE source = 'excel' AND user_id = {int(ctx.user_id)}"),
         "查询量（完整一天，ERP 接口）": "按需获取，可查询任意历史日期；当天为截至查询时的实时累计",
         "数据质量表日期": rng("SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM supply_quality"),
     }
 
 
-def _order_volume(session: Session, a: dict) -> dict:
+def _order_volume(session: Session, a: dict, ctx: ToolContext) -> dict:
     filters = {k: a.get(k) for k in ("channel_code", "supplier_code", "airline_code", "route")}
     return order_volume_anomaly(session, a.get("date"), a.get("x"), a.get("dimension"), filters,
                                 a.get("window_end"), a.get("threshold"), a.get("top_n") or 20)
 
 
-def _l2b(session: Session, a: dict) -> dict:
+def _l2b(session: Session, a: dict, ctx: ToolContext) -> dict:
     return l2b_anomaly(session, a.get("date"), a.get("x"), a.get("dimension"), a.get("partner_code"),
-                       a.get("range_type"), a.get("period_start"), a.get("period_end"), a.get("threshold"), a.get("top_n") or 20)
+                       a.get("range_type"), a.get("period_start"), a.get("period_end"), a.get("threshold"), a.get("top_n") or 20,
+                       user_id=ctx.user_id, erp_sid=ctx.erp_sid)
 
 
-def _profit_sum(session: Session, a: dict) -> dict:
+def _profit_sum(session: Session, a: dict, ctx: ToolContext) -> dict:
     return profit_summary(session, a.get("date_from"), a.get("date_to"), a.get("group_by"),
                           a.get("channel_code"), a.get("supplier_code"), a.get("airline_code"), a.get("route"), a.get("top_n") or 20)
 
 
-def _profit_anom(session: Session, a: dict) -> dict:
+def _profit_anom(session: Session, a: dict, ctx: ToolContext) -> dict:
     return profit_anomaly(session, a.get("date"), a.get("x"), a.get("dimension") or "channel", a.get("threshold"), a.get("top_n") or 20)
 
 
@@ -185,7 +195,7 @@ HANDLERS: dict[str, Callable[[Session, dict], dict]] = {
 }
 
 
-def run_tool(name: str, arguments: str | dict) -> dict[str, Any]:
+def run_tool(name: str, arguments: str | dict, ctx: ToolContext) -> dict[str, Any]:
     """执行一次工具调用，每次使用独立会话。业务错误以 {"error": ...} 返回给模型。"""
     from app.importers.common import ImportValidationError
 
@@ -195,6 +205,6 @@ def run_tool(name: str, arguments: str | dict) -> dict[str, Any]:
     args = json.loads(arguments) if isinstance(arguments, str) else (arguments or {})
     try:
         with SessionLocal() as session:
-            return handler(session, args)
+            return handler(session, args, ctx)
     except ImportValidationError as exc:
         return {"error": str(exc)}
