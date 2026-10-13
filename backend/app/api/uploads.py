@@ -1,5 +1,5 @@
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
@@ -28,6 +28,10 @@ def _serialize(b: UploadBatch) -> dict:
     def iso(v):
         return v.isoformat() if v is not None else None
 
+    def iso_utc(v):
+        # uploaded_at 存的是 UTC 时间（无时区列），输出带 +00:00，前端才能正确转成浏览器本地时间
+        return v.replace(tzinfo=timezone.utc).isoformat() if v is not None else None
+
     return {
         "id": b.id,
         "file_type": b.file_type,
@@ -40,7 +44,7 @@ def _serialize(b: UploadBatch) -> dict:
         "data_max_time": iso(b.data_max_time),
         "row_count": b.row_count,
         "summary": b.summary,
-        "uploaded_at": iso(b.uploaded_at),
+        "uploaded_at": iso_utc(b.uploaded_at),
     }
 
 
@@ -98,7 +102,7 @@ def create_upload(
                 biz_date=window.biz_date if window else None,
                 period_start=window.start if window else None,
                 period_end=window.end if window else None,
-                uploaded_at=datetime.now(),
+                uploaded_at=datetime.now(timezone.utc).replace(tzinfo=None),  # 无时区列，统一存 UTC，不依赖容器时区
                 user_id=user.id,
             )
             session.add(batch)
