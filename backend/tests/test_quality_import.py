@@ -21,7 +21,7 @@ OLD_FORMAT = {  # 航司 × 供应
 
 
 def test_old_format_without_agent_or_price_change():
-    rows, _ = build_quality_rows([(2, OLD_FORMAT)], WIN, batch_id=1)
+    rows, _ = build_quality_rows([(2, OLD_FORMAT)], WIN, batch_id=1, user_id=1)
     assert rows[0]["agent_code"] == ""
     assert rows[0]["price_change"] is None
     assert rows[0]["timeout_rate"] == Decimal("0.1471")
@@ -30,13 +30,13 @@ def test_old_format_without_agent_or_price_change():
 
 def test_new_format_with_agent_and_price_change():
     row = {**OLD_FORMAT, "agent_code": "FLYHA", "供应商变价": "601"}
-    rows, _ = build_quality_rows([(2, row)], WIN, batch_id=1)
+    rows, _ = build_quality_rows([(2, row)], WIN, batch_id=1, user_id=1)
     assert rows[0]["agent_code"] == "FLYHA"
     assert rows[0]["price_change"] == 601
 
 
 def test_rows_missing_airline_are_skipped_not_fatal():
     blank = {**OLD_FORMAT, "航司": None}
-    rows, skipped = build_quality_rows([(2, OLD_FORMAT), (3, blank)], WIN, batch_id=1)
+    rows, skipped = build_quality_rows([(2, OLD_FORMAT), (3, blank)], WIN, batch_id=1, user_id=1)
     assert len(rows) == 1
     assert skipped == [3]

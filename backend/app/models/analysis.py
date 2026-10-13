@@ -40,12 +40,13 @@ class SupplyQuality(Base):
     __tablename__ = "supply_quality"
     __table_args__ = (
         UniqueConstraint(
-            "biz_date", "range_type", "period_start", "period_end", "airline_code", "agent_code", "supplier_code",
+            "user_id", "biz_date", "range_type", "period_start", "period_end", "airline_code", "agent_code", "supplier_code",
             name="uq_supply_quality_key",
         ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)  # 数据归属：上传人 ERP UserId
     biz_date: Mapped[date] = mapped_column(Date, index=True)
     range_type: Mapped[str] = mapped_column(String(16))
     period_start: Mapped[time] = mapped_column(Time)

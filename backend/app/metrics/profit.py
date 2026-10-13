@@ -94,14 +94,14 @@ def allocations(f: OrderFacts, dim: str) -> list[tuple[str, Decimal, Decimal, in
 GROUP_DIMS = ("channel", "supplier", "airline", "route")
 
 
-def load_orders(session: Session, d0: date, d1: date, filters: dict) -> list[OrderFacts]:
-    params = {"d0": d0, "d1": d1, "done": STATUS_DONE}
+def load_orders(session: Session, d0: date, d1: date, filters: dict, user_id: int) -> list[OrderFacts]:
+    params = {"d0": d0, "d1": d1, "done": STATUS_DONE, "uid": user_id}
     orders = session.execute(
         text(
             """SELECT o.tm_order_no, o.channel_code, o.pay_date AS day, o.currency, o.total_price,
                       o.total_cny, o.total_usd, o.rate_cny, o.rate_usd
                FROM tm_order o
-               WHERE o.order_status = :done AND o.pay_date BETWEEN :d0 AND :d1
+               WHERE o.user_id = :uid AND o.order_status = :done AND o.pay_date BETWEEN :d0 AND :d1
                  AND (CAST(:ch AS TEXT) IS NULL OR o.channel_code = :ch)"""
         ),
         {**params, "ch": filters.get("channel_code") or None},
@@ -121,8 +121,8 @@ def load_orders(session: Session, d0: date, d1: date, filters: dict) -> list[Ord
     sup = session.execute(
         text(
             f"""SELECT s.tm_order_no, {SUPPLIER_EXPR} AS code, s.supplier_total_cny AS c, s.supplier_total_usd AS u
-                FROM supplier_order s JOIN tm_order o ON o.tm_order_no = s.tm_order_no
-                WHERE s.status = :done AND o.order_status = :done AND o.pay_date BETWEEN :d0 AND :d1"""
+                FROM supplier_order s JOIN tm_order o ON o.tm_order_no = s.tm_order_no AND o.user_id = s.user_id
+                WHERE s.user_id = :uid AND s.status = :done AND o.order_status = :done AND o.pay_date BETWEEN :d0 AND :d1"""
         ),
         params,
     ).mappings().all()
@@ -132,8 +132,9 @@ def load_orders(session: Session, d0: date, d1: date, filters: dict) -> list[Ord
 
     for r in session.execute(
         text(
-            """SELECT a.tm_order_no, a.airline_code FROM order_airline a JOIN tm_order o ON o.tm_order_no = a.tm_order_no
-               WHERE o.order_status = :done AND o.pay_date BETWEEN :d0 AND :d1"""
+            """SELECT a.tm_order_no, a.airline_code FROM order_airline a
+               JOIN tm_order o ON o.tm_order_no = a.tm_order_no AND o.user_id = a.user_id
+               WHERE a.user_id = :uid AND o.order_status = :done AND o.pay_date BETWEEN :d0 AND :d1"""
         ),
         params,
     ).mappings():
@@ -141,8 +142,9 @@ def load_orders(session: Session, d0: date, d1: date, filters: dict) -> list[Ord
             facts[r["tm_order_no"]].airlines.append(r["airline_code"])
     for r in session.execute(
         text(
-            """SELECT r.tm_order_no, r.route FROM order_route r JOIN tm_order o ON o.tm_order_no = r.tm_order_no
-               WHERE o.order_status = :done AND o.pay_date BETWEEN :d0 AND :d1"""
+            """SELECT r.tm_order_no, r.route FROM order_route r
+               JOIN tm_order o ON o.tm_order_no = r.tm_order_no AND o.user_id = r.user_id
+               WHERE r.user_id = :uid AND o.order_status = :done AND o.pay_date BETWEEN :d0 AND :d1"""
         ),
         params,
     ).mappings():
@@ -172,11 +174,11 @@ def load_rules(session: Session, day_from: date, day_to: date) -> dict[str, Rule
     return {r["channel_code"]: Rule(r["rule_type"], r["value"]) for r in rows}  # 同一渠道取生效日最晚的一条
 
 
-def profit_rows(session: Session, d0: date, d1: date, dim: str, filters: dict) -> list[dict]:
+def profit_rows(session: Session, d0: date, d1: date, dim: str, filters: dict, user_id: int) -> list[dict]:
     """逐订单计算利润，再按分组维度分摊汇总，结果按（日期、分组）返回。"""
     rules = load_rules(session, d0, d1)
     out: dict[tuple, dict] = {}
-    for f in load_orders(session, d0, d1, filters):
+    for f in load_orders(session, d0, d1, filters, user_id):
         pc, pu, cc, cu = order_profit(f, rules.get(f.channel_code))
         for key, fc, fu, cnt in allocations(f, dim):
             r = out.setdefault((f.day, key), {
@@ -200,7 +202,7 @@ def _money(v: Decimal) -> float:
 
 
 def profit_summary(session: Session, date_from: str, date_to: str, group_by: str = "channel",
-                   channel_code=None, supplier_code=None, airline_code=None, route=None, top_n: int = 20) -> dict:
+                   channel_code=None, supplier_code=None, airline_code=None, route=None, top_n: int = 20, *, user_id: int) -> dict:
     d0, d1 = parse_date(date_from), parse_date(date_to)
     if d1 < d0:
         raise ImportValidationError("结束日期不能早于开始日期")
@@ -209,13 +211,13 @@ def profit_summary(session: Session, date_from: str, date_to: str, group_by: str
     filters = {"channel_code": channel_code, "supplier_code": supplier_code, "airline_code": airline_code, "route": route}
     filters = {k: v for k, v in filters.items() if v}
 
-    orders = load_orders(session, d0, d1, filters)
+    orders = load_orders(session, d0, d1, filters, user_id)
     rules = load_rules(session, d0, d1)
     totals = [order_profit(f, rules.get(f.channel_code)) for f in orders]
     total_profit_cny = sum((t[0] for t in totals), Decimal("0"))
     total_profit_usd = sum((t[1] for t in totals), Decimal("0"))
     groups = {}
-    for r in profit_rows(session, d0, d1, group_by, filters):
+    for r in profit_rows(session, d0, d1, group_by, filters, user_id):
         g = groups.setdefault(r["key"], {k: Decimal("0") if isinstance(v, Decimal) else 0 for k, v in r.items() if k not in ("day", "key")})
         for k in g:
             g[k] += r[k]
@@ -245,7 +247,7 @@ def profit_summary(session: Session, date_from: str, date_to: str, group_by: str
     }
 
 
-def profit_anomaly(session: Session, date_str: str, x, dimension: str = "channel", threshold=None, top_n: int = 20) -> dict:
+def profit_anomaly(session: Session, date_str: str, x, dimension: str = "channel", threshold=None, top_n: int = 20, *, user_id: int) -> dict:
     """场景 3：利润异常。当日利润 vs 前 x 天日均利润，并拆解为「订单量」与「单均利润」的变化。"""
     if dimension not in ("channel", "supplier", "airline", "route"):
         raise ImportValidationError("利润异常的 dimension 只能是 channel / supplier / airline / route")
@@ -254,7 +256,7 @@ def profit_anomaly(session: Session, date_str: str, x, dimension: str = "channel
     thr = parse_threshold(threshold)
     h0, h1 = history_range(day, n)
 
-    rows = profit_rows(session, h0, day, dimension, {})
+    rows = profit_rows(session, h0, day, dimension, {}, user_id)
     valid_days = {r["day"] for r in rows if r["day"] < day and r["orders"] > 0}
     by_key: dict[str, dict] = {}
     for r in rows:

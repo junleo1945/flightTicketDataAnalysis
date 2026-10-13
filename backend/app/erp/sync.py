@@ -48,7 +48,9 @@ def sync_day(day) -> bool:
 
 def _run_forever() -> None:
     while True:
-        sleep(seconds_until_next_midnight(datetime.now(BEIJING)))
+        wait = seconds_until_next_midnight(datetime.now(BEIJING))
+        log.info("查订比定时同步：%.0f 秒后（北京时间 0 点）拉取前一天数据", wait)
+        sleep(wait)
         try:
             sync_day(beijing_today() - timedelta(days=1))
         except Exception:  # noqa: BLE001 - 定时任务不能因为一次失败退出

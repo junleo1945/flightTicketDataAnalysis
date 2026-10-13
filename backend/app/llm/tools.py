@@ -151,23 +151,24 @@ def _commission_rules(session: Session, a: dict, ctx: ToolContext) -> dict:
 
 
 def _coverage(session: Session, _args: dict, ctx: ToolContext) -> dict:
+    uid = int(ctx.user_id)  # 只统计当前用户自己上传/拉取的数据
     def rng(sql: str) -> dict:
         r = session.execute(text(sql)).mappings().one()
         return {"最早": str(r["lo"]) if r["lo"] else None, "最晚": str(r["hi"]) if r["hi"] else None}
 
     return {
-        "订单（渠道订单，支付日期）": rng("SELECT MIN(pay_date) AS lo, MAX(pay_date) AS hi FROM tm_order"),
-        "供应订单（支付日期，兜底后）": rng("SELECT MIN(CAST(pay_time_effective AS DATE)) AS lo, MAX(CAST(pay_time_effective AS DATE)) AS hi FROM supplier_order"),
+        "订单（渠道订单，支付日期）": rng(f"SELECT MIN(pay_date) AS lo, MAX(pay_date) AS hi FROM tm_order WHERE user_id = {uid}"),
+        "供应订单（支付日期，兜底后）": rng(f"SELECT MIN(CAST(pay_time_effective AS DATE)) AS lo, MAX(CAST(pay_time_effective AS DATE)) AS hi FROM supplier_order WHERE user_id = {uid}"),
         "查询量表日期（Excel 上传）": rng(f"SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM query_stat WHERE source = 'excel' AND user_id = {int(ctx.user_id)}"),
         "查询量（完整一天，ERP 接口）": "按需获取，可查询任意历史日期；当天为截至查询时的实时累计",
-        "数据质量表日期": rng("SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM supply_quality"),
+        "数据质量表日期": rng(f"SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM supply_quality WHERE user_id = {uid}"),
     }
 
 
 def _order_volume(session: Session, a: dict, ctx: ToolContext) -> dict:
     filters = {k: a.get(k) for k in ("channel_code", "supplier_code", "airline_code", "route")}
     return order_volume_anomaly(session, a.get("date"), a.get("x"), a.get("dimension"), filters,
-                                a.get("window_end"), a.get("threshold"), a.get("top_n") or 20)
+                                a.get("window_end"), a.get("threshold"), a.get("top_n") or 20, user_id=ctx.user_id)
 
 
 def _l2b(session: Session, a: dict, ctx: ToolContext) -> dict:
@@ -178,11 +179,13 @@ def _l2b(session: Session, a: dict, ctx: ToolContext) -> dict:
 
 def _profit_sum(session: Session, a: dict, ctx: ToolContext) -> dict:
     return profit_summary(session, a.get("date_from"), a.get("date_to"), a.get("group_by"),
-                          a.get("channel_code"), a.get("supplier_code"), a.get("airline_code"), a.get("route"), a.get("top_n") or 20)
+                          a.get("channel_code"), a.get("supplier_code"), a.get("airline_code"), a.get("route"), a.get("top_n") or 20,
+                          user_id=ctx.user_id)
 
 
 def _profit_anom(session: Session, a: dict, ctx: ToolContext) -> dict:
-    return profit_anomaly(session, a.get("date"), a.get("x"), a.get("dimension") or "channel", a.get("threshold"), a.get("top_n") or 20)
+    return profit_anomaly(session, a.get("date"), a.get("x"), a.get("dimension") or "channel", a.get("threshold"), a.get("top_n") or 20,
+                          user_id=ctx.user_id)
 
 
 HANDLERS: dict[str, Callable[[Session, dict], dict]] = {

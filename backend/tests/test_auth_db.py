@@ -272,10 +272,12 @@ def test_stream_rejects_conversation_of_another_user(client, db):
     assert r.status_code == 404
 
 
-def test_uploads_list_is_shared_across_users(client, db):
-    _login(client)
+def test_uploads_list_is_private_to_uploader(client, db):
+    _login(client)  # 张三 990001
     with db() as s, s.begin():
         s.add(User(id=990002, username="lisi", display_name="李四"))
-        s.add(UploadBatch(file_type="order", file_name="a.xlsx", file_hash="h1", user_id=990002))
+        s.add(UploadBatch(file_type="order", file_name="lisi.xlsx", file_hash="h1", user_id=990002))
+        s.add(UploadBatch(file_type="order", file_name="legacy.xlsx", file_hash="h2", user_id=None))
+        s.add(UploadBatch(file_type="order", file_name="mine.xlsx", file_hash="h3", user_id=990001))
     rows = client.get("/api/uploads").json()
-    assert len(rows) == 1 and rows[0]["file_name"] == "a.xlsx"
+    assert [r["file_name"] for r in rows] == ["mine.xlsx"]

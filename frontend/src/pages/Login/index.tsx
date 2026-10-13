@@ -78,7 +78,7 @@ export default function LoginPage({ onSuccess }: Props) {
               登录
             </Button>
             <p className="text-xs text-muted-foreground">
-              上传的数据全员共享；问答记录仅本人可见。请勿在问答中输入密码等敏感信息。
+              上传的数据与查询量仅本人可见；问答记录仅本人可见。请勿在问答中输入密码等敏感信息。
             </p>
           </form>
         </CardContent>
