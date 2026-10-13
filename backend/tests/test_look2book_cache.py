@@ -18,6 +18,8 @@ from app.erp.look2book import Look2BookRow  # noqa: E402
 from app.importers.common import ImportValidationError  # noqa: E402
 from app.metrics.query_ratio import l2b_anomaly  # noqa: E402
 from app.models.analysis import Look2BookSync, QueryStat  # noqa: E402
+from app.models.auth import User  # noqa: E402
+from app.models.grant import DataGrant  # noqa: E402
 from app.models.base import Base  # noqa: E402
 from app.models.upload import UploadBatch  # noqa: E402
 from app.auth.erp import ErpUpstreamError  # noqa: E402
@@ -25,7 +27,7 @@ from app.auth.erp import ErpUpstreamError  # noqa: E402
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="需要 TEST_DATABASE_URL 指向 PostgreSQL")
 
-TABLES = [UploadBatch.__table__, QueryStat.__table__, Look2BookSync.__table__]
+TABLES = [UploadBatch.__table__, QueryStat.__table__, Look2BookSync.__table__, User.__table__, DataGrant.__table__]
 USER, SID = 1, "user-sid"
 
 
