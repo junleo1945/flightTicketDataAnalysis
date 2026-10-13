@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 import { Toaster } from "sonner";
 import { Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import UploadPage from "./pages/Upload";
+import GrantsPage from "./pages/Grants";
 import ChatPage from "./pages/Chat";
 import LoginPage from "./pages/Login";
 import { getMe, logout, Me } from "./api/auth";
@@ -66,7 +67,11 @@ export default function App() {
     return <Navigate to={`/login?redirect=${redirect}`} replace />;
   }
 
-  const selected = location.pathname.startsWith("/upload") ? "/upload" : "/chat";
+  const selected = location.pathname.startsWith("/upload")
+    ? "/upload"
+    : location.pathname.startsWith("/grants")
+      ? "/grants"
+      : "/chat";
 
   return (
     <div className="flex h-screen flex-col">
@@ -82,6 +87,7 @@ export default function App() {
           <TabsList>
             <TabsTrigger value="/chat">问答</TabsTrigger>
             <TabsTrigger value="/upload">导入记录</TabsTrigger>
+            <TabsTrigger value="/grants">数据授权</TabsTrigger>
           </TabsList>
         </Tabs>
         <div className="flex items-center gap-2">
@@ -97,6 +103,7 @@ export default function App() {
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/chat/:id" element={<ChatPage />} />
           <Route path="/upload" element={<div className="h-full overflow-auto p-8"><UploadPage /></div>} />
+          <Route path="/grants" element={<div className="h-full overflow-auto p-8"><GrantsPage /></div>} />
           {/* 未知路径（如旧的 /history 书签）统一回到问答页 */}
           <Route path="*" element={<Navigate to="/chat" replace />} />
         </Routes>
