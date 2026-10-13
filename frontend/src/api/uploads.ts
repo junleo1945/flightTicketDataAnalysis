@@ -43,15 +43,19 @@ export async function uploadFile(file: File, fields: UploadFields): Promise<Batc
   Object.entries(fields).forEach(([k, v]) => {
     if (v !== undefined && v !== "") form.append(k, v);
   });
+  // 订单表较大（万行级，后端解析+入库约 40 秒），沿用全局 30 秒超时会误报失败，这里与 nginx 的 300 秒读超时保持一致
   const { data } = await api.post<Batch>("/uploads", form, {
     headers: { "Content-Type": "multipart/form-data" },
+    timeout: 300000,
   });
   return data;
 }
 
 // 把接口返回的错误信息转成可读文本
 export function errorMessage(err: unknown): string {
-  const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+  const e = err as { code?: string; response?: { data?: { detail?: unknown } } };
+  const detail = e?.response?.data?.detail;
   if (typeof detail === "string") return detail;
+  if (e?.code === "ECONNABORTED") return "等待超时，数据可能已导入，请到导入记录中确认后再重新上传";
   return "上传失败，请稍后重试";
 }
