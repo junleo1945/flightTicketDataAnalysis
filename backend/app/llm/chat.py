@@ -6,7 +6,7 @@ from typing import Iterator
 from openai import OpenAI
 
 from app.core.config import get_settings
-from app.llm.tools import TOOL_SPECS, run_tool
+from app.llm.tools import TOOL_SPECS, ToolContext, run_tool
 
 MAX_STEPS = 6
 TZ = timezone(timedelta(hours=8))  # 北京时间，固定偏移，不依赖系统时区数据
@@ -31,7 +31,7 @@ def _client() -> OpenAI:
     return OpenAI(api_key=s.deepseek_api_key, base_url=s.deepseek_base_url, timeout=120)
 
 
-def ask_stream(question: str, history: list[dict] | None = None) -> Iterator[dict]:
+def ask_stream(question: str, history: list[dict] | None, user_id: int, erp_sid: str) -> Iterator[dict]:
     """问答主循环（流式）。逐步产出事件：
 
     - {"type": "token", "text"}：模型输出的文字片段
@@ -113,7 +113,7 @@ def ask_stream(question: str, history: list[dict] | None = None) -> Iterator[dic
                 args = {"_raw": c["arguments"]}
             yield {"type": "tool_start", "name": c["name"], "arguments": args}
             t1 = time.monotonic()
-            result = run_tool(c["name"], args)
+            result = run_tool(c["name"], args, ToolContext(user_id=user_id, erp_sid=erp_sid))
             tool_step = {
                 "type": "tool",
                 "name": c["name"],

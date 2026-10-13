@@ -16,14 +16,6 @@ from app.erp.look2book import Look2BookClient  # noqa: E402
 BASE = "https://erp.test"
 
 
-def _login_ok(req: httpx.Request) -> httpx.Response | None:
-    if req.url.path == "/api/login":
-        return httpx.Response(200, json={"Success": True}, headers={"set-cookie": "tm_sso_sid=svc-sid; Path=/"})
-    if req.url.path == "/user/api/get":
-        return httpx.Response(200, json={"Success": True, "Data": {"UserId": 1, "UserName": "svc", "ExpireDuration": 3600}})
-    return None
-
-
 def _item(ctype, code, **kw):
     base = {"CType": ctype, "Code": code, "LookNum": 10, "LookSuccNum": 6, "BookNum": 2, "SegmentNum": 3, "InterceptNum": 1}
     base.update(kw)
@@ -31,11 +23,7 @@ def _item(ctype, code, **kw):
 
 
 def _client(handler) -> Look2BookClient:
-    def transport_handler(req: httpx.Request) -> httpx.Response:
-        auth = _login_ok(req)
-        return auth if auth is not None else handler(req)
-
-    return Look2BookClient(BASE, "svc", "pw", transport=httpx.MockTransport(transport_handler))
+    return Look2BookClient(BASE, "user-sid", transport=httpx.MockTransport(handler))
 
 
 def test_fetch_day_maps_fields_and_sends_full_day_range():
@@ -56,7 +44,7 @@ def test_fetch_day_maps_fields_and_sends_full_day_range():
     assert by[("channel", "QUNAR")].order_count == 2 and by[("channel", "QUNAR")].segment_count == 3
     assert by[("channel", "QUNAR")].blocked_count == 1
     assert by[("supplier", "AH")].query_count == 5
-    assert "tm_sso_sid=svc-sid" in seen[0].headers["cookie"]
+    assert "tm_sso_sid=user-sid" in seen[0].headers["cookie"]
 
 
 def test_pagination_stops_when_total_reached():
@@ -82,23 +70,16 @@ def test_duplicate_partner_keeps_last_record():
     assert len(rows) == 1 and rows[0].query_count == 9
 
 
-def test_session_expiry_relogs_in_once():
+def test_expired_user_session_raises_auth_error_without_retry():
     calls = {"n": 0}
 
     def handler(req):
         calls["n"] += 1
-        if calls["n"] == 1:
-            return httpx.Response(401)
-        return httpx.Response(200, json={"data": {"List": [], "Total": 0}})
+        return httpx.Response(401)
 
-    assert _client(handler).fetch_day(date(2026, 10, 10)) == []
-    assert calls["n"] == 2
-
-
-def test_repeated_auth_failure_raises_auth_error():
-    client = _client(lambda req: httpx.Response(401))
-    with pytest.raises(ErpAuthError):
-        client.fetch_day(date(2026, 10, 10))
+    with pytest.raises(ErpAuthError, match="重新登录"):
+        _client(handler).fetch_day(date(2026, 10, 10))
+    assert calls["n"] == 1
 
 
 def test_business_failure_in_body_raises_upstream_error():

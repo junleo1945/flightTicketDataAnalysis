@@ -173,7 +173,7 @@ def chat_stream(req: ChatRequest, user: CurrentUser = Depends(current_user)) -> 
         saved = False
         yield _sse({"type": "conversation", "id": conversation_id})
         try:
-            for ev in ask_stream(question, [h.model_dump() for h in req.history]):
+            for ev in ask_stream(question, [h.model_dump() for h in req.history], user.id, user.erp_sid):
                 if ev["type"] == "done":
                     _save_turn(user.id, conversation_id, question, ev)
                     saved = True

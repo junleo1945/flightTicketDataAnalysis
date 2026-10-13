@@ -24,10 +24,10 @@ METRICS = {
 OPTIONAL = {"供应商变价", "agent_code"}
 RATE_FIELDS = {"book_rate", "timeout_rate"}
 REQUIRED = ["航司", "supplier_code", *(h for h in METRICS if h not in OPTIONAL)]
-KEY = ["biz_date", "range_type", "period_start", "period_end", "airline_code", "agent_code", "supplier_code"]
+KEY = ["user_id", "biz_date", "range_type", "period_start", "period_end", "airline_code", "agent_code", "supplier_code"]
 
 
-def build_quality_rows(sheet_rows, window: Window, batch_id: int) -> tuple[list[dict], list[int]]:
+def build_quality_rows(sheet_rows, window: Window, batch_id: int, user_id: int) -> tuple[list[dict], list[int]]:
     """返回 (可入库的行, 因缺少航司或供应商代码而跳过的 Excel 行号)。"""
     rows: list[dict] = []
     skipped: list[int] = []
@@ -44,6 +44,7 @@ def build_quality_rows(sheet_rows, window: Window, batch_id: int) -> tuple[list[
             raise ImportValidationError(f"第 {row_no} 行与前面的记录重复：{airline}/{agent}/{supplier}")
         seen.add(key)
         item = {
+            "user_id": user_id,
             "biz_date": window.biz_date,
             "range_type": window.range_type,
             "period_start": window.start,
@@ -70,7 +71,7 @@ def import_quality(session: Session, batch: UploadBatch, data: bytes, window: Wi
     ws = wb.worksheets[0]
     headers, sheet_rows = read_sheet(ws)
     check_columns(headers, REQUIRED, ws.title)
-    rows, skipped = build_quality_rows(sheet_rows, window, batch.id)
+    rows, skipped = build_quality_rows(sheet_rows, window, batch.id, batch.user_id or 0)
     upsert(session.connection(), SupplyQuality.__table__, rows, KEY)
     batch.row_count = len(rows)
     fmt = "渠道×供应" if "agent_code" in headers else "供应"

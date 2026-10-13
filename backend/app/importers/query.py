@@ -17,7 +17,7 @@ METRICS = {
 REQUIRED = ["合作类型", "合作方代码", *METRICS]
 
 
-def build_query_rows(sheet_rows, window: Window, batch_id: int) -> list[dict]:
+def build_query_rows(sheet_rows, window: Window, batch_id: int, user_id: int) -> list[dict]:
     rows: list[dict] = []
     seen: set[tuple[str, str]] = set()
     for row_no, d in sheet_rows:
@@ -32,6 +32,7 @@ def build_query_rows(sheet_rows, window: Window, batch_id: int) -> list[dict]:
             raise ImportValidationError(f"第 {row_no} 行与前面的记录重复：{ptype_raw}/{code}")
         seen.add((ptype, code))
         item = {
+            "user_id": user_id,
             "biz_date": window.biz_date,
             "range_type": window.range_type,
             "period_start": window.start,
@@ -50,12 +51,12 @@ def import_query(session: Session, batch: UploadBatch, data: bytes, window: Wind
     wb = open_workbook(data)
     headers, sheet_rows = read_sheet(wb.worksheets[0])
     check_columns(headers, REQUIRED, wb.worksheets[0].title)
-    rows = build_query_rows(sheet_rows, window, batch.id)
+    rows = build_query_rows(sheet_rows, window, batch.id, batch.user_id or 0)
     upsert(
         session.connection(),
         QueryStat.__table__,
         rows,
-        ["biz_date", "range_type", "period_start", "period_end", "partner_type", "partner_code"],
+        ["user_id", "biz_date", "range_type", "period_start", "period_end", "partner_type", "partner_code"],
     )
     batch.row_count = len(rows)
     return {"记录数": len(rows), "渠道": sum(r["partner_type"] == "channel" for r in rows), "供应商": sum(r["partner_type"] == "supplier" for r in rows)}

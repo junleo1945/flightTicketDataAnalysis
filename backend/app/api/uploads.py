@@ -45,9 +45,15 @@ def _serialize(b: UploadBatch) -> dict:
 
 
 @router.get("")
-def list_batches(limit: int = 50) -> list[dict]:
+def list_batches(limit: int = 50, user: CurrentUser = Depends(current_user)) -> list[dict]:
+    """只返回当前用户自己的上传批次；无归属的历史批次不展示。"""
     with SessionLocal() as session:
-        rows = session.scalars(select(UploadBatch).order_by(UploadBatch.id.desc()).limit(min(limit, 200)))
+        rows = session.scalars(
+            select(UploadBatch)
+            .where(UploadBatch.user_id == user.id)
+            .order_by(UploadBatch.id.desc())
+            .limit(min(limit, 200))
+        )
         return [_serialize(b) for b in rows]
 
 
@@ -78,7 +84,9 @@ def create_upload(
     try:
         with SessionLocal() as session, session.begin():
             dup = session.scalar(
-                select(UploadBatch.id).where(UploadBatch.file_hash == file_hash, UploadBatch.file_type == file_type)
+                select(UploadBatch.id).where(
+                    UploadBatch.file_hash == file_hash, UploadBatch.file_type == file_type, UploadBatch.user_id == user.id
+                )
             )
             if dup is not None:
                 raise HTTPException(409, f"该文件已导入过（批次 #{dup}），未重复写入")

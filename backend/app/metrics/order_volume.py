@@ -30,24 +30,25 @@ DIMENSIONS = {
 
 
 def _sql_parts(basis: str, need_airline: bool, need_route: bool):
+    """返回 (表, 关联, 日期列, 时间列, 计数列, 状态列, 字段映射, 用户列)。关联与子表都按用户对齐。"""
     if basis == "channel":
-        frm, pk = "tm_order o", "o.tm_order_no"
+        frm, pk, uc = "tm_order o", "o.tm_order_no", "o.user_id"
         day, tm = "o.pay_date", "CAST(o.pay_time AS TIME)"
         ident, status = "o.tm_order_no", "o.order_status"
         cols = {"channel_code": "o.channel_code"}
     else:
-        frm, pk = "supplier_order s", "s.tm_order_no"
+        frm, pk, uc = "supplier_order s", "s.tm_order_no", "s.user_id"
         day, tm = "CAST(s.pay_time_effective AS DATE)", "CAST(s.pay_time_effective AS TIME)"
         ident, status = "s.tm_supplier_order_no", "s.status"
         cols = {"supplier_code": "s.supplier_code"}
     joins = []
     if need_airline:
-        joins.append(f"JOIN order_airline a ON a.tm_order_no = {pk}")
+        joins.append(f"JOIN order_airline a ON a.tm_order_no = {pk} AND a.user_id = {uc}")
         cols["airline_code"] = "a.airline_code"
     if need_route:
-        joins.append(f"JOIN order_route r ON r.tm_order_no = {pk}")
+        joins.append(f"JOIN order_route r ON r.tm_order_no = {pk} AND r.user_id = {uc}")
         cols["route"] = "r.route"
-    return frm, joins, day, tm, ident, status, cols
+    return frm, joins, day, tm, ident, status, cols, uc
 
 
 def order_volume_anomaly(
@@ -59,6 +60,8 @@ def order_volume_anomaly(
     window_end: str | None = None,
     threshold=None,
     top_n: int = 20,
+    *,
+    user_id: int,
 ) -> dict:
     """场景 1：订单量异常。当前窗口单量 vs 前 x 天同时段日均单量。"""
     if dimension not in DIMENSIONS:
@@ -72,21 +75,28 @@ def order_volume_anomaly(
 
     need_air = "airline_code" in keys or "airline_code" in filters
     need_route = "route" in keys or "route" in filters
-    frm, joins, dexpr, texpr, ident, status, cols = _sql_parts(basis, need_air, need_route)
+    frm, joins, dexpr, texpr, ident, status, cols, uc = _sql_parts(basis, need_air, need_route)
 
     wend = parse_time(window_end)
     wend_note = None
     if wend is None:
         if basis == "channel":
-            wend = latest_time(session, "SELECT MAX(pay_time) FROM tm_order WHERE pay_date = :d AND order_status = :s", {"d": day, "s": STATUS_DONE})
+            wend = latest_time(
+                session, "SELECT MAX(pay_time) FROM tm_order WHERE pay_date = :d AND order_status = :s AND user_id = :uid",
+                {"d": day, "s": STATUS_DONE, "uid": user_id},
+            )
         else:
-            wend = latest_time(session, "SELECT MAX(pay_time_effective) FROM supplier_order WHERE CAST(pay_time_effective AS DATE) = :d AND status = :s", {"d": day, "s": STATUS_DONE})
+            wend = latest_time(
+                session,
+                "SELECT MAX(pay_time_effective) FROM supplier_order WHERE CAST(pay_time_effective AS DATE) = :d AND status = :s AND user_id = :uid",
+                {"d": day, "s": STATUS_DONE, "uid": user_id},
+            )
         # 当天没有订单（如零出单）时按整天计算，才能判断出“零出单”这类异常
         wend_note = "当天没有订单数据，按整天（23:59:59）计算" if wend is None else None
         wend = wend or time(23, 59, 59)
 
-    params: dict = {"h0": h0, "day": day, "wend": wend}
-    base_where = [f"{status} = '{STATUS_DONE}'", f"{dexpr} BETWEEN :h0 AND :day", f"{texpr} <= :wend"]
+    params: dict = {"h0": h0, "day": day, "wend": wend, "uid": user_id}
+    base_where = [f"{status} = '{STATUS_DONE}'", f"{dexpr} BETWEEN :h0 AND :day", f"{texpr} <= :wend", f"{uc} = :uid"]
 
     # 有效历史天数：按未分组的整体数据判断（不受维度过滤影响）
     base_days_rows = session.execute(

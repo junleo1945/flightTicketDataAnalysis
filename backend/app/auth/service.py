@@ -1,5 +1,5 @@
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
@@ -17,6 +17,7 @@ class CurrentUser:
     id: int
     username: str
     display_name: str
+    erp_sid: str = field(default="", repr=False)  # 本人的 ERP 会话，仅服务端使用（查订比按人拉取）
 
 
 @dataclass(frozen=True)
@@ -61,7 +62,9 @@ class AuthService:
         return LoginResult(
             sid=sid,
             max_age_seconds=max_age,
-            user=CurrentUser(id=erp_user.user_id, username=erp_user.username, display_name=erp_user.display_name),
+            user=CurrentUser(
+                id=erp_user.user_id, username=erp_user.username, display_name=erp_user.display_name, erp_sid=erp_user.erp_sid
+            ),
         )
 
     def verify(self, sid: str) -> CurrentUser | None:
@@ -79,9 +82,9 @@ class AuthService:
             if row is None:
                 return None
             session_row, user = row
-            current = CurrentUser(id=user.id, username=user.username, display_name=user.display_name)
-            verified_at = _aware(session_row.verified_at)
             erp_sid = session_row.erp_sid
+            current = CurrentUser(id=user.id, username=user.username, display_name=user.display_name, erp_sid=erp_sid)
+            verified_at = _aware(session_row.verified_at)
 
         if (t - verified_at).total_seconds() < self._verify_interval:
             return current

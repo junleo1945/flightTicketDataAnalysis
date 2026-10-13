@@ -61,7 +61,7 @@ def _unique(items) -> list[str]:
     return list(dict.fromkeys(i for i in items if i))
 
 
-def build_order_records(purchase: list[tuple[int, dict]], supply: list[tuple[int, dict]], batch_id: int) -> OrderRecords:
+def build_order_records(purchase: list[tuple[int, dict]], supply: list[tuple[int, dict]], batch_id: int, user_id: int) -> OrderRecords:
     """把两个 sheet 转成待入库的记录。纯函数，不访问数据库，便于单元测试。
 
     规则要点：
@@ -106,6 +106,7 @@ def build_order_records(purchase: list[tuple[int, dict]], supply: list[tuple[int
         airlines = _unique(a for d in ds for a in split_csv(d.get("航司")))
         routes = _unique(r for d in ds for r in split_csv(d.get("行程")))
         rec.tm_orders.append({
+            "user_id": user_id,
             "tm_order_no": tm,
             "channel_code": first_text(ds, "采购客户"),
             "customer_order_no": first_text(ds, "客户订单号") or None,
@@ -128,8 +129,8 @@ def build_order_records(purchase: list[tuple[int, dict]], supply: list[tuple[int
             "airline_codes": ",".join(airlines) or None,
             "batch_id": batch_id,
         })
-        rec.airlines += [{"tm_order_no": tm, "airline_code": a} for a in airlines]
-        rec.routes += [{"tm_order_no": tm, "route": r} for r in routes]
+        rec.airlines += [{"user_id": user_id, "tm_order_no": tm, "airline_code": a} for a in airlines]
+        rec.routes += [{"user_id": user_id, "tm_order_no": tm, "route": r} for r in routes]
 
     # 供应订单
     fallback = 0
@@ -151,6 +152,7 @@ def build_order_records(purchase: list[tuple[int, dict]], supply: list[tuple[int
         else:
             eff, src = None, None
         rec.supplier_orders.append({
+            "user_id": user_id,
             "tm_supplier_order_no": sid,
             "tm_order_no": tm,
             "supplier_order_no": first_text(ds, "供应商订单号") or None,
@@ -185,15 +187,20 @@ def build_order_records(purchase: list[tuple[int, dict]], supply: list[tuple[int
     return rec
 
 
-def save_order_records(session: Session, rec: OrderRecords) -> None:
+def save_order_records(session: Session, rec: OrderRecords, user_id: int) -> None:
     conn = session.connection()
-    upsert(conn, TmOrder.__table__, rec.tm_orders, ["tm_order_no"])
-    upsert(conn, SupplierOrder.__table__, rec.supplier_orders, ["tm_supplier_order_no"])
+    upsert(conn, TmOrder.__table__, rec.tm_orders, ["user_id", "tm_order_no"])
+    upsert(conn, SupplierOrder.__table__, rec.supplier_orders, ["user_id", "tm_supplier_order_no"])
 
-    # 航司、航线为派生数据，按订单整体替换
+    # 航司、航线为派生数据，按（用户，订单）整体替换
     tm_nos = [r["tm_order_no"] for r in rec.tm_orders]
     for child in (OrderAirline, OrderRoute):
-        conn.execute(delete(child.__table__).where(child.__table__.c.tm_order_no.in_(tm_nos)))
+        if tm_nos:
+            conn.execute(
+                delete(child.__table__).where(
+                    child.__table__.c.user_id == user_id, child.__table__.c.tm_order_no.in_(tm_nos)
+                )
+            )
     if rec.airlines:
         conn.execute(insert(OrderAirline.__table__), rec.airlines)
     if rec.routes:
@@ -212,8 +219,8 @@ def import_orders(session: Session, batch: UploadBatch, data: bytes) -> dict:
     check_columns(p_headers, PURCHASE_COLS, PURCHASE_SHEET)
     check_columns(s_headers, SUPPLY_COLS, SUPPLY_SHEET)
 
-    rec = build_order_records(p_rows, s_rows, batch.id)
-    save_order_records(session, rec)
+    rec = build_order_records(p_rows, s_rows, batch.id, batch.user_id or 0)
+    save_order_records(session, rec, batch.user_id or 0)
 
     batch.data_min_time = rec.pay_min
     batch.data_max_time = rec.pay_max

@@ -24,8 +24,11 @@ def l2b_anomaly(
     period_end: str | None = None,
     threshold=None,
     top_n: int = 20,
+    *,
+    user_id: int,
+    erp_sid: str,
 ) -> dict:
-    """场景 2：查订比异常。查订比 = 查询量 / 订单量，对比前 x 天的汇总查订比基线。
+    """场景 2：查订比异常。查询量数据只取该用户自己的（上传的或用其 ERP 会话拉取的）。查订比 = 查询量 / 订单量，对比前 x 天的汇总查订比基线。
 
     overall 取全部渠道行之和（查询量表中供应商行与渠道行是不同侧的查询，不能直接相加）。
     """
@@ -47,17 +50,17 @@ def l2b_anomaly(
         raise ImportValidationError("range_type 只能是 full_day 或 period")
 
     if rt == "full_day":
-        ensure_days(session, [h0 + timedelta(days=i) for i in range((day - h0).days + 1)])
+        ensure_days(session, [h0 + timedelta(days=i) for i in range((day - h0).days + 1)], user_id, erp_sid)
 
     rows = session.execute(
         text(
             """SELECT biz_date AS d, partner_code AS code, query_count AS q, order_count AS o
                FROM query_stat
-               WHERE range_type = :rt AND period_start = :ps AND period_end = :pe
+               WHERE user_id = :uid AND range_type = :rt AND period_start = :ps AND period_end = :pe
                  AND partner_type = :pt AND biz_date BETWEEN :h0 AND :day
                  AND (CAST(:code AS TEXT) IS NULL OR partner_code = :code)"""
         ),
-        {"rt": rt, "ps": ps, "pe": pe, "pt": PTYPE[dimension], "h0": h0, "day": day, "code": partner_code or None},
+        {"uid": user_id, "rt": rt, "ps": ps, "pe": pe, "pt": PTYPE[dimension], "h0": h0, "day": day, "code": partner_code or None},
     ).mappings().all()
     if not rows:
         return {"日期": str(day), "结论": "没有该日期与范围的查询量数据，无法判断。完整一天的数据由 ERP 接口获取；时间段的数据需要上传查询量表。"}
