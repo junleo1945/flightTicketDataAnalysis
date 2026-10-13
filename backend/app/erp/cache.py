@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.auth.erp import ErpAuthError, ErpUpstreamError
+from app.auth.erp import ErpAuthError, ErpClient, ErpUpstreamError
 from app.core.config import get_settings
 from app.core.upsert import upsert
 from app.erp.look2book import Look2BookClient, Look2BookRow
@@ -31,6 +31,21 @@ class Look2BookSource(Protocol):
 
 def beijing_today() -> date:
     return datetime.now(BEIJING).date()
+
+
+def make_service_client() -> tuple[Look2BookClient, int]:
+    """用 ERP 服务账号登录，供定时同步与回填使用。返回查订比客户端与服务账号的 ERP UserId（即数据归属）。"""
+    settings = get_settings()
+    if not settings.erp_service_username or not settings.erp_service_password:
+        raise ImportValidationError("未配置 ERP 服务账号（.env 中的 ERP_SERVICE_USERNAME / ERP_SERVICE_PASSWORD），无法获取查订比数据")
+    erp = ErpClient(settings.erp_base_url)
+    try:
+        user = erp.authenticate(settings.erp_service_username, settings.erp_service_password)
+    except (ErpAuthError, ErpUpstreamError) as exc:
+        raise ImportValidationError(f"ERP 服务账号登录失败：{exc}") from exc
+    finally:
+        erp.close()
+    return Look2BookClient(settings.erp_base_url, user.erp_sid), user.user_id
 
 
 def make_client(erp_sid: str) -> Look2BookClient:

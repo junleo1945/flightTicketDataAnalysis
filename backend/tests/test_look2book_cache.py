@@ -70,7 +70,7 @@ def test_past_day_is_fetched_once_then_read_from_cache(db, today):
     with db() as s:
         row = s.scalars(select(QueryStat).where(QueryStat.biz_date == yesterday)).one()
         assert row.source == "erp_api" and row.batch_id is None and row.query_count == 10
-        assert s.get(Look2BookSync, yesterday).row_count == 1
+        assert s.get(Look2BookSync, (USER, yesterday)).row_count == 1
 
 
 def test_today_is_fetched_live_every_time_and_not_recorded(db, today):
@@ -101,7 +101,7 @@ def test_fetch_failure_raises_business_error_and_caches_nothing(db, today):
         with pytest.raises(ImportValidationError, match="查订比数据获取失败"):
             cache_mod.ensure_days(s, [yesterday], USER, SID, client=FakeSource(fail=True))
     with db() as s:
-        assert s.get(Look2BookSync, yesterday) is None
+        assert s.get(Look2BookSync, (USER, yesterday)) is None
 
 
 def test_missing_erp_session_is_reported():
