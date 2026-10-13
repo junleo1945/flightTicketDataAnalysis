@@ -4,3 +4,4 @@ from app.models.order import OrderAirline, OrderRoute, SupplierOrder, TmOrder  #
 from app.models.upload import RawOrderRow, UploadBatch  # noqa: F401
 from app.models.chat import ChatLog, Conversation  # noqa: F401
 from app.models.auth import AuthSession, User  # noqa: F401
+from app.models.grant import DataGrant  # noqa: F401

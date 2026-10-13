@@ -14,6 +14,7 @@ from decimal import Decimal
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.scope import visible_user_ids
 from app.importers.common import ImportValidationError
 from app.metrics.common import STATUS_DONE, history_range, parse_date, parse_threshold, parse_x, pct
 
@@ -95,13 +96,13 @@ GROUP_DIMS = ("channel", "supplier", "airline", "route")
 
 
 def load_orders(session: Session, d0: date, d1: date, filters: dict, user_id: int) -> list[OrderFacts]:
-    params = {"d0": d0, "d1": d1, "done": STATUS_DONE, "uid": user_id}
+    params = {"d0": d0, "d1": d1, "done": STATUS_DONE, "uids": visible_user_ids(session, user_id)}
     orders = session.execute(
         text(
             """SELECT o.tm_order_no, o.channel_code, o.pay_date AS day, o.currency, o.total_price,
                       o.total_cny, o.total_usd, o.rate_cny, o.rate_usd
                FROM tm_order o
-               WHERE o.user_id = :uid AND o.order_status = :done AND o.pay_date BETWEEN :d0 AND :d1
+               WHERE o.user_id = ANY(:uids) AND o.order_status = :done AND o.pay_date BETWEEN :d0 AND :d1
                  AND (CAST(:ch AS TEXT) IS NULL OR o.channel_code = :ch)"""
         ),
         {**params, "ch": filters.get("channel_code") or None},
@@ -122,7 +123,7 @@ def load_orders(session: Session, d0: date, d1: date, filters: dict, user_id: in
         text(
             f"""SELECT s.tm_order_no, {SUPPLIER_EXPR} AS code, s.supplier_total_cny AS c, s.supplier_total_usd AS u
                 FROM supplier_order s JOIN tm_order o ON o.tm_order_no = s.tm_order_no AND o.user_id = s.user_id
-                WHERE s.user_id = :uid AND s.status = :done AND o.order_status = :done AND o.pay_date BETWEEN :d0 AND :d1"""
+                WHERE s.user_id = ANY(:uids) AND s.status = :done AND o.order_status = :done AND o.pay_date BETWEEN :d0 AND :d1"""
         ),
         params,
     ).mappings().all()
@@ -134,7 +135,7 @@ def load_orders(session: Session, d0: date, d1: date, filters: dict, user_id: in
         text(
             """SELECT a.tm_order_no, a.airline_code FROM order_airline a
                JOIN tm_order o ON o.tm_order_no = a.tm_order_no AND o.user_id = a.user_id
-               WHERE a.user_id = :uid AND o.order_status = :done AND o.pay_date BETWEEN :d0 AND :d1"""
+               WHERE a.user_id = ANY(:uids) AND o.order_status = :done AND o.pay_date BETWEEN :d0 AND :d1"""
         ),
         params,
     ).mappings():
@@ -144,7 +145,7 @@ def load_orders(session: Session, d0: date, d1: date, filters: dict, user_id: in
         text(
             """SELECT r.tm_order_no, r.route FROM order_route r
                JOIN tm_order o ON o.tm_order_no = r.tm_order_no AND o.user_id = r.user_id
-               WHERE r.user_id = :uid AND o.order_status = :done AND o.pay_date BETWEEN :d0 AND :d1"""
+               WHERE r.user_id = ANY(:uids) AND o.order_status = :done AND o.pay_date BETWEEN :d0 AND :d1"""
         ),
         params,
     ).mappings():
