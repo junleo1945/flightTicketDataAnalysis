@@ -1,5 +1,4 @@
 import json
-import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -24,12 +23,8 @@ from app.importers.common import (
 from app.models.order import OrderAirline, OrderRoute, SupplierOrder, TmOrder
 from app.models.upload import RawOrderRow, UploadBatch
 
-# 敏感字段不入库（方案 Q10）。内置列表 + 环境变量 ORDER_EXCLUDED_FIELDS（逗号分隔）追加的列，
-# 追加的列在 .env 中配置，改完需重启后端容器才生效
-_BUILTIN_EXCLUDED_FIELDS = {"乘机人姓名", "票号", "PNR", "航司大编码"}
-EXCLUDED_FIELDS = _BUILTIN_EXCLUDED_FIELDS | {
-    c.strip() for c in os.getenv("ORDER_EXCLUDED_FIELDS", "").split(",") if c.strip()
-}
+# 敏感字段不入库（方案 Q10）：乘机人姓名、票号、PNR、航司大编码
+EXCLUDED_FIELDS = {"乘机人姓名", "票号", "PNR", "航司大编码"}
 
 PURCHASE_SHEET = "采购维度"
 SUPPLY_SHEET = "供应维度"

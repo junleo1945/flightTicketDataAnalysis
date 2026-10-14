@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
 from app.metrics.order_volume import DIMENSIONS as ORDER_DIMS, order_volume_anomaly
-from app.metrics.profit import GROUP_DIMS, profit_anomaly, profit_summary
+from app.metrics.profit import GROUP_DIMS, profit_anomaly, profit_orders, profit_summary
 from app.metrics.query_ratio import l2b_anomaly
 
 _str = {"type": "string"}
@@ -91,6 +91,24 @@ TOOL_SPECS: list[dict] = [
             "route": _str,
             "top_n": _int,
         }, ["date_from", "date_to", "group_by"]),
+    }},
+    {"type": "function", "function": {
+        "name": "profit_orders",
+        "description": (
+            "利润订单明细：列出指定日期范围内每一笔渠道订单（途灵订单号）的销售额、成本与利润，口径与利润汇总一致。"
+            "用于回答「亏损订单有哪些」「某航司的订单号」等需要具体订单号的问题。"
+            "only_loss 默认 true，只列利润为负的订单，按亏损从大到小排序。航司、航线、渠道、供应商可过滤。"
+        ),
+        "parameters": _obj({
+            "date_from": _str,
+            "date_to": _str,
+            "channel_code": _str,
+            "supplier_code": _str,
+            "airline_code": {**_str, "description": "航司二字码，如 FD"},
+            "route": {**_str, "description": "航线，如 KUL-HRB"},
+            "only_loss": {"type": "boolean", "description": "是否只列亏损订单，默认 true"},
+            "top_n": {**_int, "description": "最多返回条数，默认 50"},
+        }, ["date_from", "date_to"]),
     }},
     {"type": "function", "function": {
         "name": "commission_rules",
@@ -188,12 +206,20 @@ def _profit_anom(session: Session, a: dict, ctx: ToolContext) -> dict:
                           user_id=ctx.user_id)
 
 
+def _profit_ord(session: Session, a: dict, ctx: ToolContext) -> dict:
+    only_loss = a.get("only_loss")
+    return profit_orders(session, a.get("date_from"), a.get("date_to"), a.get("channel_code"), a.get("supplier_code"),
+                         a.get("airline_code"), a.get("route"), True if only_loss is None else bool(only_loss),
+                         a.get("top_n") or 50, user_id=ctx.user_id)
+
+
 HANDLERS: dict[str, Callable[[Session, dict], dict]] = {
     "get_data_coverage": _coverage,
     "order_volume_anomaly": _order_volume,
     "l2b_anomaly": _l2b,
     "profit_summary": _profit_sum,
     "profit_anomaly": _profit_anom,
+    "profit_orders": _profit_ord,
     "commission_rules": _commission_rules,
 }
 

@@ -8,7 +8,7 @@ os.environ.setdefault("WORKFLOW_MODEL", "test-workflow")
 from datetime import date  # noqa: E402
 from decimal import Decimal as D  # noqa: E402
 
-from app.metrics.profit import OrderFacts, Rule, allocations, order_profit  # noqa: E402
+from app.metrics.profit import OrderFacts, Rule, _order_rows, allocations, order_profit  # noqa: E402
 
 
 def _order(**kw):
@@ -66,3 +66,20 @@ def test_describe_rule_in_business_language():
     assert describe_rule("percent", D("0.02")) == "佣金 2%"
     assert describe_rule("percent", D("0.005")) == "佣金 0.5%"
     assert describe_rule("fixed_usd", D("0.2")) == "每单固定扣费 0.2 USD"
+
+
+def test_order_rows_list_only_loss_orders_sorted_by_profit_usd():
+    loss_big = _order(tm_order_no="L1", airlines=["FD"], routes=["KUL-HRB"], suppliers=[("DBFL", D("800"), D("120"))])
+    loss_small = _order(tm_order_no="L2", airlines=["FD"], routes=["KUL-HRB"], suppliers=[("DBFL", D("710"), D("101"))])
+    gain = _order(tm_order_no="G1", airlines=["FD"], routes=["KUL-HRB"], suppliers=[("DBFL", D("560"), D("80"))])
+    rows = _order_rows([loss_small, gain, loss_big], {}, only_loss=True)
+    assert [r["途灵订单号"] for r in rows] == ["L1", "L2"]
+    assert rows[0]["利润"]["USD"] == -20.0
+    assert rows[0]["航司"] == "FD" and rows[0]["供应商"] == "DBFL"
+
+
+def test_order_rows_can_include_all_orders():
+    gain = _order(tm_order_no="G1", suppliers=[("DBFL", D("560"), D("80"))])
+    loss = _order(tm_order_no="L1", suppliers=[("DBFL", D("800"), D("120"))])
+    rows = _order_rows([gain, loss], {}, only_loss=False)
+    assert [r["途灵订单号"] for r in rows] == ["L1", "G1"]
