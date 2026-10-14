@@ -304,3 +304,48 @@ def profit_anomaly(session: Session, date_str: str, x, dimension: str = "channel
         "异常明细（变化率从低到高）": anomalies[:top_n],
         "说明": "利润变化可拆解为：订单量变化（current_orders vs baseline_orders_daily_avg）与单均利润变化（current_avg_profit_usd vs baseline_avg_profit_usd）。",
     }
+
+
+def _order_rows(facts: list[OrderFacts], rules: dict[str, Rule], only_loss: bool) -> list[dict]:
+    """逐单生成利润明细（按利润 USD 从低到高）。纯函数，便于单元测试。"""
+    rows = []
+    for f in facts:
+        pc, pu, cc, cu = order_profit(f, rules.get(f.channel_code))
+        if only_loss and pu >= 0:
+            continue
+        rows.append({
+            "途灵订单号": f.tm_order_no,
+            "支付日期": str(f.day),
+            "渠道": f.channel_code,
+            "航司": ",".join(dict.fromkeys(f.airlines)) or "(无)",
+            "航线": ",".join(dict.fromkeys(f.routes)) or "(无)",
+            "供应商": ",".join(dict.fromkeys(c for c, _, _ in f.suppliers)) or "(无供应订单)",
+            "销售额": {"CNY": _money(f.sales_cny), "USD": _money(f.sales_usd)},
+            "成本": {"CNY": _money(cc), "USD": _money(cu)},
+            "利润": {"CNY": _money(pc), "USD": _money(pu)},
+            "_sort": pu,
+        })
+    rows.sort(key=lambda r: r["_sort"])
+    for r in rows:
+        del r["_sort"]
+    return rows
+
+
+def profit_orders(session: Session, date_from: str, date_to: str, channel_code=None, supplier_code=None,
+                  airline_code=None, route=None, only_loss: bool = True, top_n: int = 50, *, user_id: int) -> dict:
+    """逐单利润明细：列出每一笔渠道订单（途灵订单号）的销售额、成本与利润，口径与利润汇总一致。"""
+    d0, d1 = parse_date(date_from), parse_date(date_to)
+    if d1 < d0:
+        raise ImportValidationError("结束日期不能早于开始日期")
+    filters = {"channel_code": channel_code, "supplier_code": supplier_code, "airline_code": airline_code, "route": route}
+    filters = {k: v for k, v in filters.items() if v}
+
+    facts = load_orders(session, d0, d1, filters, user_id)
+    rows = _order_rows(facts, load_rules(session, d0, d1), only_loss)
+    return {
+        "日期范围": f"{d0} ～ {d1}",
+        "统计口径": "渠道订单（采购维度 出票完成），销售额与成本按规则计算，与利润汇总口径一致",
+        "筛选": "仅亏损订单（利润 USD < 0）" if only_loss else "全部订单",
+        "符合条件的订单数": len(rows),
+        f"订单明细（利润 USD 从低到高，最多 {top_n} 条）": rows[:top_n],
+    }

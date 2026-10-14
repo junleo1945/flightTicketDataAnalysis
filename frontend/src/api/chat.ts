@@ -42,6 +42,8 @@ export interface StreamHandlers {
   onConversation: (id: number) => void;
   onToken: (text: string) => void;
   onToolStart: (name: string, args: Record<string, unknown>) => void;
+  // 回答结构不合格，模型正在重新生成：清空已输出的文字
+  onRetry: () => void;
   onStep: (step: TraceStep) => void;
   onDone: (result: ChatResult) => void;
 }
@@ -96,6 +98,9 @@ export async function streamQuestion(
           break;
         case "tool_start":
           h.onToolStart(ev.name, ev.arguments);
+          break;
+        case "retry":
+          h.onRetry();
           break;
         case "step":
           h.onStep(ev.step);

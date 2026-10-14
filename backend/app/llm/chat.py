@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Iterator
@@ -6,9 +7,16 @@ from typing import Iterator
 from openai import OpenAI
 
 from app.core.config import get_settings
+from app.llm.answer_check import check_answer
 from app.llm.tools import TOOL_SPECS, ToolContext, run_tool
 
+log = logging.getLogger(__name__)
 MAX_STEPS = 6
+MAX_FORMAT_RETRIES = 2  # 回答结构不合格时最多让模型重写的次数，超过后直接修复返回
+FORMAT_RETRY_PROMPT = (
+    "上一版回答的结构有问题：{issues}。请基于同一批工具结果重新输出完整回答，内容和数字保持不变，"
+    "表格的分隔行列数必须与表头一致。"
+)
 TZ = timezone(timedelta(hours=8))  # 北京时间，固定偏移，不依赖系统时区数据
 
 SYSTEM_PROMPT = """你是公司内部的机票经营数据分析助手。当前时间：{now}（北京时间）。
@@ -20,8 +28,9 @@ SYSTEM_PROMPT = """你是公司内部的机票经营数据分析助手。当前�
 4. 回答末尾注明：口径（渠道订单 / 供应订单）、时间窗口、阈值。
 5. 工具返回 error 或数据不足时，如实说明，不推测原因。
 6. 不确定数据是否已上传时，先调用 get_data_coverage 查看。
-7. 回答用中文，结论先行，必要时用简短表格列出异常明细。合计行请在行首加粗（如 **合计**）。
-8. 回答面向业务人员：不要提及工具或函数名（如 get_data_coverage）、参数名或内部字段名；口径用业务语言描述。"""
+7. 用户问订单号、亏损订单明细、某航司/航线的具体订单时，调用利润订单明细工具列出途灵订单号，不要以「无法提供订单号」为由拒绝；列出的订单数超过返回条数时，说明只展示前若干条。
+9. 回答用中文，结论先行，必要时用简短表格列出异常明细。合计行请在行首加粗（如 **合计**）。
+10. 回答面向业务人员：不要提及工具或函数名（如 get_data_coverage）、参数名或内部字段名；口径用业务语言描述。"""
 
 
 def _client() -> OpenAI:
@@ -37,6 +46,7 @@ def ask_stream(question: str, history: list[dict] | None, user_id: int, erp_sid:
     - {"type": "token", "text"}：模型输出的文字片段
     - {"type": "tool_start", "name", "arguments"}：开始执行某个计算函数
     - {"type": "step", "step"}：一步完成（模型一轮 / 计算函数一次），step 结构见 trace
+    - {"type": "retry", "attempt"}：回答结构不合格，模型重新生成，前端应清空已输出的文字
     - {"type": "done", "answer", "trace", "tool_calls", "model", "latency_ms"}：最终结果
 
     trace 按时间顺序记录完整计算过程：
@@ -56,15 +66,20 @@ def ask_stream(question: str, history: list[dict] | None, user_id: int, erp_sid:
     started = time.monotonic()
 
     def done(answer: str) -> dict:
+        # 入库和返回前校验回答结构（如表格列数），有问题就修复并记录，统计模型出错频率
+        checked = check_answer(answer)
+        for issue in checked.issues:
+            log.warning("回答结构校验：%s（问题：%s）", issue, question[:80])
         return {
             "type": "done",
-            "answer": answer,
+            "answer": checked.answer,
             "trace": trace,
             "tool_calls": [t for t in trace if t["type"] == "tool"],
             "model": s.agent_model,
             "latency_ms": int((time.monotonic() - started) * 1000),
         }
 
+    format_retries = 0
     for round_no in range(1, MAX_STEPS + 1):
         t0 = time.monotonic()
         stream = client.chat.completions.create(
@@ -96,6 +111,15 @@ def ask_stream(question: str, history: list[dict] | None, user_id: int, erp_sid:
         yield {"type": "step", "step": llm_step}
 
         if not calls:
+            # 回答结构不合格（如表格列数错误）：让模型按问题重新输出，最多重试 MAX_FORMAT_RETRIES 次
+            checked = check_answer(content)
+            if checked.issues and format_retries < MAX_FORMAT_RETRIES:
+                format_retries += 1
+                log.warning("回答结构不合格，第 %d 次重新生成：%s", format_retries, "；".join(checked.issues))
+                messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": FORMAT_RETRY_PROMPT.format(issues="；".join(checked.issues))})
+                yield {"type": "retry", "attempt": format_retries}
+                continue
             yield done(content)
             return
 

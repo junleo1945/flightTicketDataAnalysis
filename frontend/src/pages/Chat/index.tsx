@@ -11,6 +11,7 @@ import Composer from "./Composer";
 import ConversationList from "./ConversationList";
 import ProcessTrace, { TOOL_LABEL } from "./ProcessTrace";
 import { chatError, ChatResult, HistoryItem, streamQuestion, TraceStep } from "../../api/chat";
+import { normalizeTables } from "../../lib/markdown";
 import {
   ConversationSummary,
   deleteConversation,
@@ -159,6 +160,7 @@ export default function ChatPage() {
           },
           onToken: (t) => patch(pending, (m) => ({ ...m, text: m.text + t })),
           onToolStart: (name) => patch(pending, (m) => ({ ...m, text: "", running: TOOL_LABEL[name] ?? name })),
+          onRetry: () => patch(pending, (m) => ({ ...m, text: "" })),
           onStep: (step) =>
             patch(pending, (m) => ({ ...m, steps: [...m.steps, step], running: step.type === "tool" ? null : m.running })),
           onDone: (result) => patch(pending, (m) => ({ ...m, result, text: "", running: null, steps: result.trace })),
@@ -302,28 +304,24 @@ function AssistantView({ msg }: { msg: AssistantMsg }) {
     }
   };
 
-  if (!answer && !msg.running && msg.steps.length === 0) {
-    return (
-      <div className="report">
-        <div className="thinking">
-          <i /><i /><i /> 正在理解问题
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="report">
       {answer && (
         <div className={`report-body ${streaming ? "caret" : ""}`}>
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-            {answer}
+            {normalizeTables(answer)}
           </ReactMarkdown>
         </div>
       )}
       {!answer && msg.running && (
         <div className="status-line">
           <span className="thinking"><i /><i /><i /></span> 正在计算
+        </div>
+      )}
+      {/* 等待模型输出：包括第一轮思考，以及工具算完、模型整理回答前的间隔（此时 running 已清空，过程也不会展开） */}
+      {!answer && !msg.running && streaming && (
+        <div className="status-line">
+          <span className="thinking"><i /><i /><i /></span> {msg.steps.length === 0 ? "正在理解问题" : "正在整理回答"}
         </div>
       )}
       {r && (
