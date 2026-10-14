@@ -8,7 +8,6 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
-from app.core.scope import visible_user_ids
 from app.metrics.order_volume import DIMENSIONS as ORDER_DIMS, order_volume_anomaly
 from app.metrics.profit import GROUP_DIMS, profit_anomaly, profit_summary
 from app.metrics.query_ratio import l2b_anomaly
@@ -152,18 +151,17 @@ def _commission_rules(session: Session, a: dict, ctx: ToolContext) -> dict:
 
 
 def _coverage(session: Session, _args: dict, ctx: ToolContext) -> dict:
-    # 统计当前用户自己及被授权用户的数据范围（与指标查询的可见范围一致）
-    params = {"uids": visible_user_ids(session, int(ctx.user_id))}
+    uid = int(ctx.user_id)  # 只统计当前用户自己上传/拉取的数据
     def rng(sql: str) -> dict:
-        r = session.execute(text(sql), params).mappings().one()
+        r = session.execute(text(sql)).mappings().one()
         return {"最早": str(r["lo"]) if r["lo"] else None, "最晚": str(r["hi"]) if r["hi"] else None}
 
     return {
-        "订单（渠道订单，支付日期）": rng("SELECT MIN(pay_date) AS lo, MAX(pay_date) AS hi FROM tm_order WHERE user_id = ANY(:uids)"),
-        "供应订单（支付日期，兜底后）": rng("SELECT MIN(CAST(pay_time_effective AS DATE)) AS lo, MAX(CAST(pay_time_effective AS DATE)) AS hi FROM supplier_order WHERE user_id = ANY(:uids)"),
-        "查询量表日期（Excel 上传）": rng("SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM query_stat WHERE source = 'excel' AND user_id = ANY(:uids)"),
+        "订单（渠道订单，支付日期）": rng(f"SELECT MIN(pay_date) AS lo, MAX(pay_date) AS hi FROM tm_order WHERE user_id = {uid}"),
+        "供应订单（支付日期，兜底后）": rng(f"SELECT MIN(CAST(pay_time_effective AS DATE)) AS lo, MAX(CAST(pay_time_effective AS DATE)) AS hi FROM supplier_order WHERE user_id = {uid}"),
+        "查询量表日期（Excel 上传）": rng(f"SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM query_stat WHERE source = 'excel' AND user_id = {int(ctx.user_id)}"),
         "查询量（完整一天，ERP 接口）": "按需获取，可查询任意历史日期；当天为截至查询时的实时累计",
-        "数据质量表日期": rng("SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM supply_quality WHERE user_id = ANY(:uids)"),
+        "数据质量表日期": rng(f"SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM supply_quality WHERE user_id = {uid}"),
     }
 
 

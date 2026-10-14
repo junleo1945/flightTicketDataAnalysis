@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session
 
 from datetime import timedelta
 
-from app.core.scope import visible_user_ids
 from app.erp.cache import beijing_today, ensure_days
 from app.importers.common import ImportValidationError
 from app.metrics.common import history_range, parse_date, parse_threshold, parse_time, parse_x, pct
@@ -57,11 +56,11 @@ def l2b_anomaly(
         text(
             """SELECT biz_date AS d, partner_code AS code, query_count AS q, order_count AS o
                FROM query_stat
-               WHERE user_id = ANY(:uids) AND range_type = :rt AND period_start = :ps AND period_end = :pe
+               WHERE user_id = :uid AND range_type = :rt AND period_start = :ps AND period_end = :pe
                  AND partner_type = :pt AND biz_date BETWEEN :h0 AND :day
                  AND (CAST(:code AS TEXT) IS NULL OR partner_code = :code)"""
         ),
-        {"uids": visible_user_ids(session, user_id), "rt": rt, "ps": ps, "pe": pe, "pt": PTYPE[dimension], "h0": h0, "day": day, "code": partner_code or None},
+        {"uid": user_id, "rt": rt, "ps": ps, "pe": pe, "pt": PTYPE[dimension], "h0": h0, "day": day, "code": partner_code or None},
     ).mappings().all()
     if not rows:
         return {"日期": str(day), "结论": "没有该日期与范围的查询量数据，无法判断。完整一天的数据由 ERP 接口获取；时间段的数据需要上传查询量表。"}
