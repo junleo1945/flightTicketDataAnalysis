@@ -12,15 +12,15 @@ from decimal import Decimal  # noqa: E402
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-from sqlalchemy import create_engine  # noqa: E402
+from sqlalchemy import create_engine, delete  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from app.api import deps as deps_api  # noqa: E402
 from app.api import grants as grants_api  # noqa: E402
+from app.api import uploads as uploads_api  # noqa: E402
 from app.auth.erp import ErpAuthError, ErpUser  # noqa: E402
 from app.auth.limiter import FixedWindowLimiter  # noqa: E402
 from app.auth.service import AuthService  # noqa: E402
-from app.core.scope import visible_user_ids  # noqa: E402
 from app.main import app  # noqa: E402
 from app.metrics.common import STATUS_DONE  # noqa: E402
 from app.metrics.profit import load_orders  # noqa: E402
@@ -28,7 +28,8 @@ from app.models.base import Base  # noqa: E402
 from app.models.grant import DataGrant  # noqa: E402
 from app.models.order import OrderAirline, OrderRoute, SupplierOrder, TmOrder  # noqa: E402
 from app.models.auth import AuthSession, User  # noqa: E402
-from app.models.upload import UploadBatch  # noqa: E402
+from app.models.analysis import QueryStat  # noqa: E402
+from app.models.upload import RawOrderRow, UploadBatch  # noqa: E402
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_DB, reason="需要 TEST_DATABASE_URL 指向 PostgreSQL")
@@ -57,7 +58,8 @@ class FakeErp:
 def db():
     engine = create_engine(TEST_DB)
     tables = [User.__table__, AuthSession.__table__, DataGrant.__table__, UploadBatch.__table__, TmOrder.__table__,
-              SupplierOrder.__table__, OrderAirline.__table__, OrderRoute.__table__]
+              SupplierOrder.__table__, OrderAirline.__table__, OrderRoute.__table__, RawOrderRow.__table__,
+              QueryStat.__table__]
     Base.metadata.drop_all(engine, tables=tables)
     Base.metadata.create_all(engine, tables=tables)
     yield sessionmaker(bind=engine, expire_on_commit=False)
@@ -71,6 +73,7 @@ def client(db, monkeypatch):
     app.dependency_overrides[deps_api.get_auth_service] = lambda: auth
     app.dependency_overrides[deps_api.get_login_limiter] = lambda: FixedWindowLimiter(limit=100, window_seconds=60)
     monkeypatch.setattr(grants_api, "SessionLocal", db)
+    monkeypatch.setattr(uploads_api, "SessionLocal", db)
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -86,25 +89,9 @@ def _seed_users(db):
                    User(id=WW, username="wangwu", display_name="王五")])
 
 
-# ---------- 可见范围 ----------
+# ---------- 分析与问答不受授权影响 ----------
 
-def test_visible_ids_default_to_self(db):
-    _seed_users(db)
-    with db() as s:
-        assert visible_user_ids(s, ZS) == [ZS]
-
-
-def test_visible_ids_include_granted_owner(db):
-    _seed_users(db)
-    with db() as s, s.begin():
-        s.add(DataGrant(owner_user_id=ZS, grantee_user_id=LS))
-    with db() as s:
-        assert visible_user_ids(s, LS) == sorted([LS, ZS])
-        assert visible_user_ids(s, ZS) == [ZS]  # 授权是单向的
-        assert visible_user_ids(s, WW) == [WW]
-
-
-def test_metrics_read_owner_orders_only_when_granted(db):
+def test_analysis_does_not_read_owner_orders_even_when_granted(db):
     _seed_users(db)
     with db() as s, s.begin():
         s.add(UploadBatch(id=1, file_type="order", file_name="a.xlsx", file_hash="h", user_id=ZS))
@@ -112,11 +99,48 @@ def test_metrics_read_owner_orders_only_when_granted(db):
         s.add(TmOrder(tm_order_no="T1", user_id=ZS, batch_id=1, channel_code="C1", order_status=STATUS_DONE,
                       pay_date=date(2026, 10, 10), total_price=Decimal("100"), passenger_count=1))
         s.add(DataGrant(owner_user_id=ZS, grantee_user_id=LS))
-    day0, day1 = date(2026, 10, 10), date(2026, 10, 10)
+    day = date(2026, 10, 10)
     with db() as s:
-        assert [o.tm_order_no for o in load_orders(s, day0, day1, {}, LS)] == ["T1"]
-        assert load_orders(s, day0, day1, {}, WW) == []  # 未授权的人看不到
-        assert [o.tm_order_no for o in load_orders(s, day0, day1, {}, ZS)] == ["T1"]  # 本人始终可见
+        assert load_orders(s, day, day, {}, ZS)  # 拥有者本人可见
+        assert load_orders(s, day, day, {}, LS) == []  # 被授权人不能用分析读到拥有者数据
+
+
+# ---------- 批次明细可见性 ----------
+
+def _seed_batches(db):
+    _seed_users(db)
+    with db() as s, s.begin():
+        s.add(UploadBatch(id=1, file_type="order", file_name="a.xlsx", file_hash="h1", user_id=ZS))
+        s.add(UploadBatch(id=2, file_type="order", file_name="b.xlsx", file_hash="h2", user_id=WW))
+    with db() as s, s.begin():
+        s.add(RawOrderRow(batch_id=1, sheet_name="采购维度", row_no=2, data={"途灵订单号": "T1", "采购客户": "C1"}))
+        s.add(RawOrderRow(batch_id=2, sheet_name="采购维度", row_no=2, data={"途灵订单号": "T9"}))
+
+
+def test_owner_sees_own_batch_rows(client, db):
+    _seed_batches(db)
+    _login(client, "zhangsan")
+    body = client.get("/api/uploads/1/rows").json()
+    assert body["total"] == 1 and body["rows"][0]["途灵订单号"] == "T1"
+    assert body["columns"][:2] == ["sheet_name", "row_no"]
+
+
+def test_grantee_sees_granted_batch_rows_and_loses_after_revoke(client, db):
+    _seed_batches(db)
+    with db() as s, s.begin():
+        s.add(DataGrant(owner_user_id=ZS, grantee_user_id=LS))
+    _login(client, "lisi")
+    assert client.get("/api/uploads/1/rows").status_code == 200
+    assert client.get("/api/uploads/2/rows").status_code == 404  # 王五的批次未授权
+    with db() as s, s.begin():
+        s.execute(delete(DataGrant))
+    assert client.get("/api/uploads/1/rows").status_code == 404  # 撤销后立即不可见
+
+
+def test_stranger_cannot_see_rows(client, db):
+    _seed_batches(db)
+    _login(client, "lisi")
+    assert client.get("/api/uploads/1/rows").status_code == 404
 
 
 # ---------- 授权接口 ----------

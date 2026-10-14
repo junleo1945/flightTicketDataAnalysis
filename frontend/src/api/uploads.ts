@@ -59,3 +59,19 @@ export function errorMessage(err: unknown): string {
   if (e?.code === "ECONNABORTED") return "等待超时，数据可能已导入，请到导入记录中确认后再重新上传";
   return "上传失败，请稍后重试";
 }
+
+export interface BatchRows {
+  batch_id: number;
+  file_type: FileType;
+  total: number;
+  page: number;
+  page_size: number;
+  columns: string[];
+  rows: Record<string, unknown>[];
+}
+
+// 批次明细（分页）：拥有者或被授权人可查看，分析与问答不受此影响
+export async function getBatchRows(batchId: number, page: number): Promise<BatchRows> {
+  const { data } = await api.get<BatchRows>(`/uploads/${batchId}/rows`, { params: { page } });
+  return data;
+}

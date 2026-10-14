@@ -4,7 +4,6 @@ from datetime import time
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.core.scope import visible_user_ids
 from app.importers.common import ImportValidationError
 from app.metrics.common import (
     STATUS_DONE,
@@ -78,27 +77,26 @@ def order_volume_anomaly(
     need_route = "route" in keys or "route" in filters
     frm, joins, dexpr, texpr, ident, status, cols, uc = _sql_parts(basis, need_air, need_route)
 
-    uids = visible_user_ids(session, user_id)
     wend = parse_time(window_end)
     wend_note = None
     if wend is None:
         if basis == "channel":
             wend = latest_time(
-                session, "SELECT MAX(pay_time) FROM tm_order WHERE pay_date = :d AND order_status = :s AND user_id = ANY(:uids)",
-                {"d": day, "s": STATUS_DONE, "uids": uids},
+                session, "SELECT MAX(pay_time) FROM tm_order WHERE pay_date = :d AND order_status = :s AND user_id = :uid",
+                {"d": day, "s": STATUS_DONE, "uid": user_id},
             )
         else:
             wend = latest_time(
                 session,
-                "SELECT MAX(pay_time_effective) FROM supplier_order WHERE CAST(pay_time_effective AS DATE) = :d AND status = :s AND user_id = ANY(:uids)",
-                {"d": day, "s": STATUS_DONE, "uids": uids},
+                "SELECT MAX(pay_time_effective) FROM supplier_order WHERE CAST(pay_time_effective AS DATE) = :d AND status = :s AND user_id = :uid",
+                {"d": day, "s": STATUS_DONE, "uid": user_id},
             )
         # 当天没有订单（如零出单）时按整天计算，才能判断出“零出单”这类异常
         wend_note = "当天没有订单数据，按整天（23:59:59）计算" if wend is None else None
         wend = wend or time(23, 59, 59)
 
-    params: dict = {"h0": h0, "day": day, "wend": wend, "uids": uids}
-    base_where = [f"{status} = '{STATUS_DONE}'", f"{dexpr} BETWEEN :h0 AND :day", f"{texpr} <= :wend", f"{uc} = ANY(:uids)"]
+    params: dict = {"h0": h0, "day": day, "wend": wend, "uid": user_id}
+    base_where = [f"{status} = '{STATUS_DONE}'", f"{dexpr} BETWEEN :h0 AND :day", f"{texpr} <= :wend", f"{uc} = :uid"]
 
     # 有效历史天数：按未分组的整体数据判断（不受维度过滤影响）
     base_days_rows = session.execute(

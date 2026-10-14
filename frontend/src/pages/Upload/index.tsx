@@ -9,6 +9,7 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import BatchRowsDialog from "./BatchRowsDialog";
 
 const PAGE_SIZE = 10;
 
@@ -45,6 +46,7 @@ export default function UploadPage() {
   const [submitting, setSubmitting] = useState(false);
   const [batches, setBatches] = useState<Batch[]>([]);
   const [page, setPage] = useState(1);
+  const [detailBatch, setDetailBatch] = useState<Batch | null>(null);
 
   const needsWindow = form.file_type === "query" || form.file_type === "quality";
 
@@ -206,12 +208,13 @@ export default function UploadPage() {
                   <th className="px-3 py-2 font-medium">数据范围</th>
                   <th className="px-3 py-2 text-right font-medium">记录数</th>
                   <th className="px-3 py-2 font-medium">上传时间</th>
+                  <th className="px-3 py-2 text-right font-medium">明细</th>
                 </tr>
               </thead>
               <tbody>
                 {pageRows.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-3 py-8 text-center text-muted-foreground">
+                    <td colSpan={7} className="px-3 py-8 text-center text-muted-foreground">
                       还没有导入记录
                     </td>
                   </tr>
@@ -230,6 +233,11 @@ export default function UploadPage() {
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{b.row_count}</td>
                     <td className="px-3 py-2">{b.uploaded_at ? new Date(b.uploaded_at).toLocaleString("zh-CN") : "-"}</td>
+                    <td className="px-3 py-2 text-right">
+                      <Button variant="outline" size="sm" onClick={() => setDetailBatch(b)}>
+                        查看
+                      </Button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -253,6 +261,7 @@ export default function UploadPage() {
           </CardDescription>
         </CardContent>
       </Card>
+      <BatchRowsDialog batch={detailBatch} onClose={() => setDetailBatch(null)} />
     </div>
   );
 }
