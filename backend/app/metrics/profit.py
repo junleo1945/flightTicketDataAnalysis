@@ -244,6 +244,7 @@ def profit_summary(session: Session, date_from: str, date_to: str, group_by: str
         "亏损订单数": sum(1 for t in totals if t[1] < 0),
         "分组数": len(items),
         "分组明细（利润 USD 从低到高）": items[:top_n],
+        "佣金说明": "全部渠道都计入；配置了佣金规则的渠道按规则扣减，未配置的渠道不扣佣金（利润 = 销售额 − 成本）。",
     }
 
 
