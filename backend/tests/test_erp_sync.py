@@ -10,12 +10,22 @@ from datetime import date, datetime  # noqa: E402
 from app.erp.cache import BEIJING  # noqa: E402
 from app.erp.export_sql import render_sql  # noqa: E402
 from app.erp.look2book import Look2BookRow  # noqa: E402
-from app.erp.sync import seconds_until_next_midnight  # noqa: E402
+from app.erp.sync import seconds_until_next_sync  # noqa: E402
 
 
-def test_seconds_until_next_midnight_is_beijing_midnight():
+def test_seconds_until_next_sync_before_8am_is_same_day():
+    now = datetime(2026, 10, 12, 7, 30, tzinfo=BEIJING)
+    assert seconds_until_next_sync(now) == 30 * 60
+
+
+def test_seconds_until_next_sync_after_8am_is_next_day():
     now = datetime(2026, 10, 12, 23, 30, tzinfo=BEIJING)
-    assert seconds_until_next_midnight(now) == 30 * 60
+    assert seconds_until_next_sync(now) == 8.5 * 3600
+
+
+def test_seconds_until_next_sync_at_exactly_8am_waits_a_full_day():
+    now = datetime(2026, 10, 12, 8, 0, tzinfo=BEIJING)
+    assert seconds_until_next_sync(now) == 24 * 3600
 
 
 def test_render_sql_escapes_codes_and_upserts_both_tables():

@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     # ERP 服务账号：用于拉取查订比接口（/flight/config/look2book/records），密码只放在 .env
     erp_service_username: str = ""
     erp_service_password: str = ""
-    # 每天北京时间 0 点同步前一天的查订比数据；多实例部署时由数据库advisory lock 保证只执行一次
+    # 每天北京时间 8 点同步前一天的查订比数据；多实例部署时由数据库advisory lock 保证只执行一次
     query_sync_enabled: bool = True
 
     # 大模型：接口地址与模型 ID 必须由使用者指定，代码不设默认值

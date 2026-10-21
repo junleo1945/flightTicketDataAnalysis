@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 from app.core.db import SessionLocal
 from app.metrics.order_volume import DIMENSIONS as ORDER_DIMS, order_volume_anomaly
 from app.metrics.profit import GROUP_DIMS, profit_anomaly, profit_orders, profit_summary
-from app.metrics.query_ratio import SORT_KEYS, l2b_anomaly, l2b_summary
+from app.metrics.coverage import order_coverage
+from app.metrics.query_ratio import SORT_KEYS, l2b_anomaly, l2b_daily, l2b_summary
 
 _str = {"type": "string"}
 _num = {"type": "number"}
@@ -32,7 +33,10 @@ def _obj(props: dict, required: list[str]) -> dict:
 TOOL_SPECS: list[dict] = [
     {"type": "function", "function": {
         "name": "get_data_coverage",
-        "description": "查看已导入数据的日期范围，判断某个问题能否回答。",
+        "description": (
+            "查看已导入数据的日期范围，判断某个问题能否回答。订单数据会同时返回范围内缺失的日期"
+            "（没上传，不是没有订单）和最晚一天是否可能不完整；统计涉及这些日期时必须先告知用户。"
+        ),
         "parameters": _obj({}, []),
     }},
     {"type": "function", "function": {
@@ -83,7 +87,7 @@ TOOL_SPECS: list[dict] = [
             "并给出合计。渠道范围以查询量数据为准，与是否配置佣金规则无关。不需要 x，不做历史对比。"
             "用于回答「各渠道数据表现」「哪些渠道查询量/订单量最多」「某天查订比表现不好的渠道/供应是哪家」等问题。"
             "查订比 = 查询量 / 订单量，越高表示查得多订得少、表现越差；sort_by=l2b 按表现从差到好排，有查询无订单的排最前。"
-            "dimension：overall 整体；channel 按渠道；supplier 按供应商。"
+            "dimension：overall 整体；channel 按渠道；supplier 按供应商。按合作方分组；要看逐日走势用 l2b_daily。"
         ),
         "parameters": _obj({
             "date_from": _str,
@@ -96,6 +100,20 @@ TOOL_SPECS: list[dict] = [
             "sort_by": {"type": "string", "enum": list(SORT_KEYS), "description": "排序字段：query 查询量从高到低（默认）；order 订单量从高到低；l2b 查订比从高到低（表现从差到好）"},
             "top_n": {**_int, "description": "最多返回的分组数，默认 50；未展示的分组会给出合计"},
         }, ["date_from", "date_to", "dimension"]),
+    }},
+    {"type": "function", "function": {
+        "name": "l2b_daily",
+        "description": (
+            "按日取查询量、订单量、查订比的原始值（不做异常判断）：用于回答「某几天的查询量/订单量是多少」"
+            "「每天查订比走势」等取数问题，一次最多 31 天。数据来自 ERP 接口的完整一天，没有数据的日期会明确标出。"
+            "dimension：overall 全部渠道合计；channel 渠道侧；supplier 供应商侧。partner_code 不填则汇总该侧全部合作方。"
+        ),
+        "parameters": _obj({
+            "date_from": _str,
+            "date_to": _str,
+            "dimension": {"type": "string", "enum": ["overall", "channel", "supplier"], "description": "默认 overall"},
+            "partner_code": {**_str, "description": "合作方代码，不填则汇总全部"},
+        }, ["date_from", "date_to"]),
     }},
     {"type": "function", "function": {
         "name": "profit_summary",
@@ -195,15 +213,14 @@ def _commission_rules(session: Session, a: dict, ctx: ToolContext) -> dict:
 def _coverage(session: Session, _args: dict, ctx: ToolContext) -> dict:
     uid = int(ctx.user_id)  # 只统计当前用户自己上传/拉取的数据
     def rng(sql: str) -> dict:
-        r = session.execute(text(sql)).mappings().one()
+        r = session.execute(text(sql), {"uid": uid}).mappings().one()
         return {"最早": str(r["lo"]) if r["lo"] else None, "最晚": str(r["hi"]) if r["hi"] else None}
 
     return {
-        "订单（渠道订单，支付日期）": rng(f"SELECT MIN(pay_date) AS lo, MAX(pay_date) AS hi FROM tm_order WHERE user_id = {uid}"),
-        "供应订单（支付日期，兜底后）": rng(f"SELECT MIN(CAST(pay_time_effective AS DATE)) AS lo, MAX(CAST(pay_time_effective AS DATE)) AS hi FROM supplier_order WHERE user_id = {uid}"),
-        "查询量表日期（Excel 上传）": rng(f"SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM query_stat WHERE source = 'excel' AND user_id = {int(ctx.user_id)}"),
+        **order_coverage(session, uid),
+        "查询量表日期（Excel 上传）": rng("SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM query_stat WHERE source = 'excel' AND user_id = :uid"),
         "查询量（完整一天，ERP 接口）": "按需获取，可查询任意历史日期；当天为截至查询时的实时累计",
-        "数据质量表日期": rng(f"SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM supply_quality WHERE user_id = {uid}"),
+        "数据质量表日期": rng("SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM supply_quality WHERE user_id = :uid"),
     }
 
 
@@ -223,6 +240,11 @@ def _l2b_sum(session: Session, a: dict, ctx: ToolContext) -> dict:
     return l2b_summary(session, a.get("date_from"), a.get("date_to"), a.get("dimension"), a.get("partner_code"),
                        a.get("range_type"), a.get("period_start"), a.get("period_end"), a.get("sort_by"), a.get("top_n") or 50,
                        user_id=ctx.user_id, erp_sid=ctx.erp_sid)
+
+
+def _l2b_daily(session: Session, a: dict, ctx: ToolContext) -> dict:
+    return l2b_daily(session, a.get("date_from"), a.get("date_to"), a.get("dimension") or "overall", a.get("partner_code"),
+                     user_id=ctx.user_id, erp_sid=ctx.erp_sid)
 
 
 def _profit_sum(session: Session, a: dict, ctx: ToolContext) -> dict:
@@ -248,6 +270,7 @@ HANDLERS: dict[str, Callable[[Session, dict], dict]] = {
     "order_volume_anomaly": _order_volume,
     "l2b_anomaly": _l2b,
     "l2b_summary": _l2b_sum,
+    "l2b_daily": _l2b_daily,
     "profit_summary": _profit_sum,
     "profit_anomaly": _profit_anom,
     "profit_orders": _profit_ord,
