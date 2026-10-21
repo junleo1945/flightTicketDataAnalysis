@@ -5,8 +5,11 @@ export const TOOL_LABEL: Record<string, string> = {
   get_data_coverage: "数据覆盖查询",
   order_volume_anomaly: "订单量异常分析",
   l2b_anomaly: "查订比异常分析",
+  l2b_summary: "查订比汇总",
   profit_summary: "利润汇总",
   profit_anomaly: "利润异常分析",
+  profit_orders: "利润订单明细",
+  commission_rules: "佣金规则查询",
 };
 
 const ARG_LABEL: Record<string, string> = {
@@ -27,6 +30,8 @@ const ARG_LABEL: Record<string, string> = {
   date_from: "从",
   date_to: "至",
   group_by: "分组",
+  sort_by: "排序",
+  only_loss: "仅亏损",
 };
 
 function argsSummary(args: Record<string, unknown>): string {

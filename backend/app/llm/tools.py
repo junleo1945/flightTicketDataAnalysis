@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.db import SessionLocal
 from app.metrics.order_volume import DIMENSIONS as ORDER_DIMS, order_volume_anomaly
 from app.metrics.profit import GROUP_DIMS, profit_anomaly, profit_orders, profit_summary
-from app.metrics.query_ratio import l2b_anomaly
+from app.metrics.query_ratio import SORT_KEYS, l2b_anomaly, l2b_summary
 
 _str = {"type": "string"}
 _num = {"type": "number"}
@@ -62,6 +62,7 @@ TOOL_SPECS: list[dict] = [
             "查订比异常（场景2）：查订比 = 查询量 / 订单量。当前查订比与前 x 天汇总查订比基线对比，下降超过阈值判定异常。"
             "查询量数据：完整一天由 ERP 接口按日获取（历史整天会缓存，当天实时获取）；时间段范围需要上传查询量表。"
             "dimension：overall 整体；channel 单渠道；supplier 单供应。"
+            "只返回异常的分组；要看全部渠道/供应商的查询量、订单量、查订比，用 l2b_summary。"
         ),
         "parameters": _obj({
             "date": _str,
@@ -74,6 +75,27 @@ TOOL_SPECS: list[dict] = [
             "threshold": _num,
             "top_n": _int,
         }, ["date", "x", "dimension"]),
+    }},
+    {"type": "function", "function": {
+        "name": "l2b_summary",
+        "description": (
+            "查订比汇总（渠道/供应商数据表现）：指定日期范围内，列出数据中出现的全部渠道或供应商的查询量、有报价量、拦截量、订单量、查订比，"
+            "并给出合计。渠道范围以查询量数据为准，与是否配置佣金规则无关。不需要 x，不做历史对比。"
+            "用于回答「各渠道数据表现」「哪些渠道查询量/订单量最多」「某天查订比表现不好的渠道/供应是哪家」等问题。"
+            "查订比 = 查询量 / 订单量，越高表示查得多订得少、表现越差；sort_by=l2b 按表现从差到好排，有查询无订单的排最前。"
+            "dimension：overall 整体；channel 按渠道；supplier 按供应商。"
+        ),
+        "parameters": _obj({
+            "date_from": _str,
+            "date_to": _str,
+            "dimension": {"type": "string", "enum": ["overall", "channel", "supplier"]},
+            "partner_code": {**_str, "description": "合作方代码，不填则返回全部"},
+            "range_type": {"type": "string", "enum": ["full_day", "period"], "description": "默认 full_day"},
+            "period_start": {**_str, "description": "时间段开始 HH:MM，range_type=period 时必填"},
+            "period_end": {**_str, "description": "时间段结束 HH:MM，range_type=period 时必填"},
+            "sort_by": {"type": "string", "enum": list(SORT_KEYS), "description": "排序字段：query 查询量从高到低（默认）；order 订单量从高到低；l2b 查订比从高到低（表现从差到好）"},
+            "top_n": {**_int, "description": "最多返回的分组数，默认 50；未展示的分组会给出合计"},
+        }, ["date_from", "date_to", "dimension"]),
     }},
     {"type": "function", "function": {
         "name": "profit_summary",
@@ -116,6 +138,8 @@ TOOL_SPECS: list[dict] = [
             "查看当前佣金规则配置：每个渠道的佣金方式、数值和生效时间。"
             "percent 表示按销售额的百分比扣减（利润 = 销售额 × (1 − 佣金率) − 成本）；"
             "fixed_usd 表示每单固定扣费（单位 USD）。不填渠道则返回全部。"
+            "佣金规则只用于利润计算，不是渠道清单：分析渠道表现时不要用它圈定渠道范围，"
+            "利润工具已自动对配置了规则的渠道扣佣金、未配置的渠道不扣。"
         ),
         "parameters": _obj({
             "channel_code": _str,
@@ -164,7 +188,7 @@ def _commission_rules(session: Session, a: dict, ctx: ToolContext) -> dict:
             }
             for r in rows
         ],
-        "说明": "未列出的渠道没有佣金，利润 = 销售额 − 成本。",
+        "说明": "未列出的渠道没有佣金，利润 = 销售额 − 成本。本表只用于利润计算，不是渠道清单，渠道范围以订单/查询量数据为准。",
     }
 
 
@@ -195,6 +219,12 @@ def _l2b(session: Session, a: dict, ctx: ToolContext) -> dict:
                        user_id=ctx.user_id, erp_sid=ctx.erp_sid)
 
 
+def _l2b_sum(session: Session, a: dict, ctx: ToolContext) -> dict:
+    return l2b_summary(session, a.get("date_from"), a.get("date_to"), a.get("dimension"), a.get("partner_code"),
+                       a.get("range_type"), a.get("period_start"), a.get("period_end"), a.get("sort_by"), a.get("top_n") or 50,
+                       user_id=ctx.user_id, erp_sid=ctx.erp_sid)
+
+
 def _profit_sum(session: Session, a: dict, ctx: ToolContext) -> dict:
     return profit_summary(session, a.get("date_from"), a.get("date_to"), a.get("group_by"),
                           a.get("channel_code"), a.get("supplier_code"), a.get("airline_code"), a.get("route"), a.get("top_n") or 20,
@@ -217,6 +247,7 @@ HANDLERS: dict[str, Callable[[Session, dict], dict]] = {
     "get_data_coverage": _coverage,
     "order_volume_anomaly": _order_volume,
     "l2b_anomaly": _l2b,
+    "l2b_summary": _l2b_sum,
     "profit_summary": _profit_sum,
     "profit_anomaly": _profit_anom,
     "profit_orders": _profit_ord,
