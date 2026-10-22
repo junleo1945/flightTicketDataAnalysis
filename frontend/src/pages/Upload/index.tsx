@@ -16,7 +16,6 @@ const PAGE_SIZE = 10;
 const FILE_TYPE_OPTIONS: { value: FileType; label: string }[] = [
   { value: "order", label: "订单表（OrderList，时间由表内支付时间决定）" },
   { value: "query", label: "查询量表" },
-  { value: "quality", label: "数据质量表" },
 ];
 
 interface FormState {
@@ -48,7 +47,7 @@ export default function UploadPage() {
   const [page, setPage] = useState(1);
   const [detailBatch, setDetailBatch] = useState<Batch | null>(null);
 
-  const needsWindow = form.file_type === "query" || form.file_type === "quality";
+  const needsWindow = form.file_type === "query";
 
   const reload = () => listBatches().then(setBatches).catch(() => setBatches([]));
   useEffect(() => {
@@ -257,7 +256,7 @@ export default function UploadPage() {
             </div>
           )}
           <CardDescription>
-            同一文件（内容相同）不会重复导入。查询量、数据质量表同一日期与范围的记录会被覆盖更新。
+            同一文件（内容相同）不会重复导入。查询量表同一日期与范围的记录会被覆盖更新。
           </CardDescription>
         </CardContent>
       </Card>

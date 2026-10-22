@@ -34,40 +34,44 @@ class QueryStat(Base):
     source: Mapped[str] = mapped_column(String(16), default="excel", server_default="excel")  # excel / erp_api
 
 
-class SupplyQuality(Base):
-    """数据质量表（两种格式共用，供应版的 agent_code 为空串）。"""
+class DataQualityStat(Base):
+    """验价生单数据质量（来自接口，整天，全局一份，不按用户隔离）。"""
 
-    __tablename__ = "supply_quality"
+    __tablename__ = "data_quality_stat"
     __table_args__ = (
-        UniqueConstraint(
-            "user_id", "biz_date", "range_type", "period_start", "period_end", "airline_code", "agent_code", "supplier_code",
-            name="uq_supply_quality_key",
-        ),
+        UniqueConstraint("stat_date", "agent_code", "supplier_code", "ticket_carrier", name="uq_data_quality_stat_key"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, index=True)  # 数据归属：上传人 ERP UserId
-    biz_date: Mapped[date] = mapped_column(Date, index=True)
-    range_type: Mapped[str] = mapped_column(String(16))
-    period_start: Mapped[time] = mapped_column(Time)
-    period_end: Mapped[time] = mapped_column(Time)
-    airline_code: Mapped[str] = mapped_column(String(8))
-    agent_code: Mapped[str] = mapped_column(String(64), default="")
+    stat_date: Mapped[date] = mapped_column(Date, index=True)
+    agent_code: Mapped[str] = mapped_column(String(64))  # 渠道（客户）
     supplier_code: Mapped[str] = mapped_column(String(64))
-    verify_total: Mapped[int] = mapped_column(BigInteger, default=0)
-    timeout_5s: Mapped[int] = mapped_column(BigInteger, default=0)
-    timeout_10s: Mapped[int] = mapped_column(BigInteger, default=0)
+    ticket_carrier: Mapped[str] = mapped_column(String(8))  # 航司
+    total: Mapped[int] = mapped_column(BigInteger, default=0)
+    timeout_5_10: Mapped[int] = mapped_column(BigInteger, default=0)
+    timeout_gt_10: Mapped[int] = mapped_column(BigInteger, default=0)
     verify_success: Mapped[int] = mapped_column(BigInteger, default=0)
     verify_fail: Mapped[int] = mapped_column(BigInteger, default=0)
     supplier_success: Mapped[int] = mapped_column(BigInteger, default=0)
     supplier_fail: Mapped[int] = mapped_column(BigInteger, default=0)
-    price_change: Mapped[int | None] = mapped_column(BigInteger)
-    not_booked: Mapped[int] = mapped_column(BigInteger, default=0)
-    book_success: Mapped[int] = mapped_column(BigInteger, default=0)
-    book_fail: Mapped[int] = mapped_column(BigInteger, default=0)
-    book_rate: Mapped[Decimal] = mapped_column(Numeric(10, 6), default=0)
+    supplier_changed: Mapped[int] = mapped_column(BigInteger, default=0)
+    unbook: Mapped[int] = mapped_column(BigInteger, default=0)
+    booking_success: Mapped[int] = mapped_column(BigInteger, default=0)
+    booking_fail: Mapped[int] = mapped_column(BigInteger, default=0)
+    # 以下三个是接口给的比率，只用于与反算值对照，分析一律用数量字段重新计算
+    booking_rate: Mapped[Decimal] = mapped_column(Numeric(10, 6), default=0)
+    booking_success_rate: Mapped[Decimal] = mapped_column(Numeric(10, 6), default=0)
     timeout_rate: Mapped[Decimal] = mapped_column(Numeric(10, 6), default=0)
-    batch_id: Mapped[int] = mapped_column(ForeignKey("upload_batch.id"), index=True)
+
+
+class DataQualitySync(Base):
+    """数据质量历史整天的缓存标记：某天已从接口拉取并写入 data_quality_stat。当天不记录，每次实时拉取。"""
+
+    __tablename__ = "data_quality_sync"
+
+    stat_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    row_count: Mapped[int] = mapped_column(Integer, default=0)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class CommissionRule(Base):

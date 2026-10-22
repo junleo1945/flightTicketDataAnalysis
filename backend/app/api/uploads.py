@@ -11,8 +11,7 @@ from app.core.db import SessionLocal
 from app.importers.common import ImportValidationError, Window, build_window
 from app.importers.order import import_orders
 from app.importers.query import import_query
-from app.importers.quality import import_quality
-from app.models.analysis import QueryStat, SupplyQuality
+from app.models.analysis import QueryStat
 from app.models.grant import DataGrant
 from app.models.upload import RawOrderRow, UploadBatch
 
@@ -23,7 +22,6 @@ router = APIRouter(prefix="/api/uploads", tags=["uploads"], dependencies=[Depend
 IMPORTERS = {
     "order": lambda s, b, d, w: import_orders(s, b, d),
     "query": import_query,
-    "quality": import_quality,
 }
 
 
@@ -86,7 +84,7 @@ def batch_rows(
     page: int = Query(1, ge=1),
     user: CurrentUser = Depends(current_user),
 ) -> dict:
-    """批次明细（分页）。订单表返回脱敏后的原始行；查询量、数据质量表返回解析后的行。"""
+    """批次明细（分页）。订单表返回脱敏后的原始行；查询量表返回解析后的行。"""
     with SessionLocal() as session:
         batch = session.get(UploadBatch, batch_id)
         if batch is None or not _can_view_batch(session, user.id, batch):
@@ -104,7 +102,7 @@ def batch_rows(
             for r in rows:
                 columns += [k for k in r if k not in columns]
         else:
-            model = QueryStat if batch.file_type == "query" else SupplyQuality
+            model = QueryStat
             total = session.scalar(select(func.count()).select_from(model).where(model.batch_id == batch_id))
             items = session.scalars(
                 select(model).where(model.batch_id == batch_id).order_by(model.id).offset(offset).limit(DETAIL_PAGE_SIZE)
@@ -142,7 +140,7 @@ def create_upload(
     period_end: str | None = Form(None),
 ) -> dict:
     if file_type not in IMPORTERS:
-        raise HTTPException(400, "file_type 只能是 order / query / quality")
+        raise HTTPException(400, "file_type 只能是 order / query")
     data = file.file.read()
     if not data:
         raise HTTPException(400, "文件为空")

@@ -8,9 +8,11 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
+from app.erp.quality_cache import cached_range
 from app.metrics.order_volume import DIMENSIONS as ORDER_DIMS, order_volume_anomaly
 from app.metrics.profit import GROUP_DIMS, profit_anomaly, profit_orders, profit_summary
 from app.metrics.coverage import order_coverage
+from app.metrics.data_quality import GROUPS as QUALITY_GROUPS, SORT_KEYS as QUALITY_SORT_KEYS, quality_diagnose, quality_summary
 from app.metrics.query_ratio import SORT_KEYS, l2b_anomaly, l2b_daily, l2b_summary
 
 _str = {"type": "string"}
@@ -114,6 +116,51 @@ TOOL_SPECS: list[dict] = [
             "dimension": {"type": "string", "enum": ["overall", "channel", "supplier"], "description": "默认 overall"},
             "partner_code": {**_str, "description": "合作方代码，不填则汇总全部"},
         }, ["date_from", "date_to"]),
+    }},
+    {"type": "function", "function": {
+        "name": "quality_summary",
+        "description": (
+            "验价生单数据质量汇总：指定日期范围内，按渠道 / 供应商 / 航司及其组合汇总验价总数、验价成功失败、报表超时率、"
+            "校验成功内超时率、供应校验成功失败与变价、预定率等，并给出合计与问题等级（重点关注 / 需要关注 / 小样本仅展示）。"
+            "所有比率由数量字段求和后重新计算；分母为 0 时显示「无有效数据」。"
+            "group_by：overall 整体；channel 渠道；supplier 供应商；airline 航司；channel_supplier / channel_airline / "
+            "channel_supplier_airline 为组合。by_day=true 时每个分组再按日分别计算（看逐日走势用 group_by=overall 加 by_day）。"
+            "数据来自接口：完整一天可查任意历史日期（当天为实时累计）；range_type=period 时按每天的同一时段（小时级，如 10:00～12:00）实时查询，最多 7 天。"
+            "问「某渠道某天失败率多少、主要是哪个供应商/航司出了问题」用 quality_diagnose；本工具用于取数、排名和对比。"
+        ),
+        "parameters": _obj({
+            "date_from": _str,
+            "date_to": _str,
+            "group_by": {"type": "string", "enum": list(QUALITY_GROUPS)},
+            "by_day": {"type": "boolean", "description": "是否按日分别计算，默认 false（多日先累计再算比率）"},
+            "agent_code": {**_str, "description": "渠道代码过滤"},
+            "supplier_code": {**_str, "description": "供应商代码过滤"},
+            "ticket_carrier": {**_str, "description": "航司二字码过滤"},
+            "range_type": {"type": "string", "enum": ["full_day", "period"], "description": "默认 full_day"},
+            "period_start": {**_str, "description": "时间段开始 HH:MM，range_type=period 时必填"},
+            "period_end": {**_str, "description": "时间段结束 HH:MM，range_type=period 时必填"},
+            "sort_by": {"type": "string", "enum": list(QUALITY_SORT_KEYS), "description": "sample 验价总数（默认）；verify_fail_rate 渠道校验失败率；supplier_fail_rate 供应校验失败率；timeout_rate 报表超时率；booking_rate 渠道预定率"},
+            "ascending": {"type": "boolean", "description": "是否从低到高排，默认 false（从高到低）；看预定率最低的用 true"},
+            "top_n": {**_int, "description": "最多返回的分组数，默认 50"},
+        }, ["date_from", "date_to", "group_by"]),
+    }},
+    {"type": "function", "function": {
+        "name": "quality_diagnose",
+        "description": (
+            "验价生单数据质量问题定位：针对一个渠道，按产品规则依次给出渠道校验失败率与问题等级、各供应商（供应侧失败率、失败贡献率）、"
+            "各航司（渠道侧失败率、失败贡献率），并对主要异常供应商下钻航司、对主要异常航司下钻供应商，给出主要异常组合和排序依据。"
+            "用于回答「渠道 X 在某天的校验失败率是多少？主要是哪个供应商、哪个航司出了问题？」。"
+            "超时同时给出报表超时率和校验成功内超时率。数据来自接口，时间范围规则同 quality_summary。"
+        ),
+        "parameters": _obj({
+            "date_from": _str,
+            "date_to": {**_str, "description": "结束日期；只看一天时与 date_from 相同"},
+            "agent_code": {**_str, "description": "渠道代码，必填"},
+            "range_type": {"type": "string", "enum": ["full_day", "period"], "description": "默认 full_day"},
+            "period_start": {**_str, "description": "时间段开始 HH:MM，range_type=period 时必填"},
+            "period_end": {**_str, "description": "时间段结束 HH:MM，range_type=period 时必填"},
+            "top_n": {**_int, "description": "供应商层、航司层最多返回的条数，默认 10"},
+        }, ["date_from", "date_to", "agent_code"]),
     }},
     {"type": "function", "function": {
         "name": "profit_summary",
@@ -220,7 +267,10 @@ def _coverage(session: Session, _args: dict, ctx: ToolContext) -> dict:
         **order_coverage(session, uid),
         "查询量表日期（Excel 上传）": rng("SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM query_stat WHERE source = 'excel' AND user_id = :uid"),
         "查询量（完整一天，ERP 接口）": "按需获取，可查询任意历史日期；当天为截至查询时的实时累计",
-        "数据质量表日期": rng("SELECT MIN(biz_date) AS lo, MAX(biz_date) AS hi FROM supply_quality WHERE user_id = :uid"),
+        "验价生单数据质量（接口）": {
+            "说明": "按需从接口获取，可查询任意历史日期，支持小时级时间段；当天为截至查询时的实时累计",
+            "已缓存的整天日期": cached_range(session),
+        },
     }
 
 
@@ -247,6 +297,18 @@ def _l2b_daily(session: Session, a: dict, ctx: ToolContext) -> dict:
                      user_id=ctx.user_id, erp_sid=ctx.erp_sid)
 
 
+def _quality_sum(session: Session, a: dict, ctx: ToolContext) -> dict:
+    return quality_summary(session, a.get("date_from"), a.get("date_to"), a.get("group_by"), bool(a.get("by_day")),
+                           a.get("agent_code"), a.get("supplier_code"), a.get("ticket_carrier"),
+                           a.get("range_type"), a.get("period_start"), a.get("period_end"),
+                           a.get("sort_by"), bool(a.get("ascending")), a.get("top_n") or 50)
+
+
+def _quality_diag(session: Session, a: dict, ctx: ToolContext) -> dict:
+    return quality_diagnose(session, a.get("date_from"), a.get("date_to") or a.get("date_from"), a.get("agent_code"),
+                            a.get("range_type"), a.get("period_start"), a.get("period_end"), a.get("top_n") or 10)
+
+
 def _profit_sum(session: Session, a: dict, ctx: ToolContext) -> dict:
     return profit_summary(session, a.get("date_from"), a.get("date_to"), a.get("group_by"),
                           a.get("channel_code"), a.get("supplier_code"), a.get("airline_code"), a.get("route"), a.get("top_n") or 20,
@@ -271,6 +333,8 @@ HANDLERS: dict[str, Callable[[Session, dict], dict]] = {
     "l2b_anomaly": _l2b,
     "l2b_summary": _l2b_sum,
     "l2b_daily": _l2b_daily,
+    "quality_summary": _quality_sum,
+    "quality_diagnose": _quality_diag,
     "profit_summary": _profit_sum,
     "profit_anomaly": _profit_anom,
     "profit_orders": _profit_ord,
