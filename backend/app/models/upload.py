@@ -13,10 +13,10 @@ class UploadBatch(Base):
     __tablename__ = "upload_batch"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    file_type: Mapped[str] = mapped_column(String(16))  # order / query / quality
+    file_type: Mapped[str] = mapped_column(String(16))  # order / query
     file_name: Mapped[str] = mapped_column(String(255))
     file_hash: Mapped[str] = mapped_column(String(64), index=True)
-    range_type: Mapped[str | None] = mapped_column(String(16))  # full_day / period，仅查询量、数据质量
+    range_type: Mapped[str | None] = mapped_column(String(16))  # full_day / period，仅查询量
     biz_date: Mapped[date | None] = mapped_column(Date)
     period_start: Mapped[time | None] = mapped_column(Time)
     period_end: Mapped[time | None] = mapped_column(Time)

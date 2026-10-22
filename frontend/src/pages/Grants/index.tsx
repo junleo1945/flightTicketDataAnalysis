@@ -90,7 +90,7 @@ export default function GrantsPage() {
         <CardHeader>
           <CardTitle>数据授权</CardTitle>
           <CardDescription>
-            授权后，对方可以在导入记录中查看你上传的订单表、查询量表、数据质量表的明细（只读）。分析和问答不在授权范围内，对方仍只能分析自己的数据。
+            授权后，对方可以在导入记录中查看你上传的订单表、查询量表的明细（只读）。分析和问答不在授权范围内，对方仍只能分析自己的数据。
             数据不会被复制，撤销即时生效。对方需要先登录过本系统，才能按用户名找到。
           </CardDescription>
         </CardHeader>

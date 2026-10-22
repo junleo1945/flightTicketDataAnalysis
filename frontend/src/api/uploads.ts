@@ -1,11 +1,10 @@
 import { api } from "./client";
 
-export type FileType = "order" | "query" | "quality";
+export type FileType = "order" | "query";
 
 export const FILE_TYPE_LABEL: Record<FileType, string> = {
   order: "订单表",
   query: "查询量表",
-  quality: "数据质量表",
 };
 export type RangeType = "full_day" | "period";
 

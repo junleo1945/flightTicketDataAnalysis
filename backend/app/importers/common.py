@@ -12,7 +12,7 @@ class ImportValidationError(ValueError):
 
 @dataclass(frozen=True)
 class Window:
-    """查询量、数据质量表的时间范围（由用户在上传时选择，见 Q2/Q17）。"""
+    """查询量表的时间范围（由用户在上传时选择，见 Q2/Q17）。"""
 
     range_type: str  # full_day / period
     biz_date: date

@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     # 每天北京时间 8 点同步前一天的查订比数据；多实例部署时由数据库advisory lock 保证只执行一次
     query_sync_enabled: bool = True
 
+    # 验价生单数据质量接口（内网，免鉴权）。地址为空时不影响启动，拉取时提示未配置
+    data_quality_base_url: str = ""
+    # 启动时自动补齐从该日期到昨天的数据质量数据（只补缺的天）；为空则不回填
+    data_quality_backfill_from: str = ""
+
     # 大模型：接口地址与模型 ID 必须由使用者指定，代码不设默认值
     deepseek_api_key: str | None = None  # 调用模型时才校验，骨架阶段允许为空
     deepseek_base_url: str = Field(..., description="兼容 OpenAI 接口的地址，如代理或百炼地址")
